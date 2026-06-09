@@ -116,6 +116,7 @@ def _write_one(
             logger.warning("[%s] generation call failed for %r (%s)",
                            site_id, trend.title, exc)
             return None
+        raw = _repair(raw, trend)  # cheap local fixes (title length, source links) — avoid a regen
         errors = _validate(raw, trend, target_words)
         if not errors:
             return _build_package(raw, assignment)
@@ -202,7 +203,7 @@ def _build_prompt(
         "must also appear in the \"faq\" JSON field).\n"
         f"5. A closing <h2>What this means for you</h2> takeaway written "
         f"specifically for: {audience}.\n"
-        "6. At least TWO outbound links (<a href=\"...\">) pointing to the "
+        "6. REQUIRED: include at least TWO <a href=\"...\"> links pointing to the "
         "SOURCE MATERIAL urls, woven naturally into the body.\n"
         f"{_format_internal_links(internal_links)}\n\n"
         f"{_format_categories(existing_categories)}"
@@ -211,7 +212,7 @@ def _build_prompt(
         "wrapper.\n\n"
         "OUTPUT — return STRICT JSON only (no markdown fences), with EXACTLY these "
         "keys:\n"
-        '{"title": "<=60 chars, no clickbait", "slug": "kebab-case", '
+        '{"title": "MUST be under 60 characters, no clickbait", "slug": "kebab-case", '
         '"meta_description": "<=155 chars", "focus_keyword": "main keyword phrase", '
         '"tags": ["3 to 6 tags"], "category": "an existing category if one fits, '
         'else a new short one", '
@@ -261,6 +262,47 @@ def _retry_suffix(errors: list[str]) -> str:
     bullets = "\n".join(f"- {e}" for e in errors)
     return ("\n\nYOUR PREVIOUS OUTPUT FAILED VALIDATION. Fix every problem below "
             f"and return corrected STRICT JSON:\n{bullets}")
+
+
+# --------------------------------------------------------------------------- #
+# Local auto-repair (avoid wasting a Gemini regeneration on cheap problems)
+# --------------------------------------------------------------------------- #
+def _repair(raw: Any, trend: Trend) -> Any:
+    """Fix cheap validation issues in place so we don't burn a regeneration:
+      * trim an over-length title (<=60) / meta_description (<=155)
+      * if the body lacks the required source links, append a 'Sources' section.
+    """
+    if not isinstance(raw, dict):
+        return raw
+    if raw.get("title"):
+        raw["title"] = _trim(str(raw["title"]), 60)
+    if raw.get("meta_description"):
+        raw["meta_description"] = _trim(str(raw["meta_description"]), 155)
+
+    html = str(raw.get("html_content", ""))
+    source_urls = [item.url for item in trend.news_items if item.url]
+    if source_urls:
+        present = sum(1 for url in set(source_urls) if url in html)
+        if present < min(2, len(source_urls)):
+            block = _sources_block(trend)
+            if block:
+                raw["html_content"] = html + block
+    return raw
+
+
+def _sources_block(trend: Trend) -> str:
+    """A simple <h2>Sources</h2> list linking every source URL (dedup, in order)."""
+    seen: set[str] = set()
+    items = []
+    for item in trend.news_items:
+        if item.url and item.url not in seen:
+            seen.add(item.url)
+            label = html_lib.escape(item.source or item.title or "Source")
+            href = html_lib.escape(item.url, quote=True)
+            items.append(f'<li><a href="{href}">{label}</a></li>')
+    if not items:
+        return ""
+    return "\n<h2>Sources</h2>\n<ul>\n" + "\n".join(items) + "\n</ul>"
 
 
 # --------------------------------------------------------------------------- #

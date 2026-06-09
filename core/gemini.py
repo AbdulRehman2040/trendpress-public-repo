@@ -1,21 +1,22 @@
 """Gemini API wrapper built on the modern google-genai SDK.
 
-Resilience model (tuned for production / model-overload weather):
-  * Pinned model (GEMINI_MODEL, default gemini-2.5-flash) — never an alias like
-    *-latest, which can change under you. A fallback model (GEMINI_FALLBACK_MODEL,
-    default gemini-2.5-flash-lite) is used when overload persists.
-  * Multiple API keys are round-robined per call to spread load.
+Resilience model (tuned for model-overload weather):
+  * Pinned primary model (GEMINI_MODEL, default gemini-2.5-flash) — never an alias
+    like *-latest. A fallback model (GEMINI_FALLBACK_MODEL or GEMINI_MODEL_FALLBACK,
+    default gemini-2.5-flash-lite) is used when the primary stays overloaded.
+  * Multiple API keys round-robined per call to spread load.
   * Error-aware retries (exponential backoff + jitter, env-tunable):
-      429 / quota / rate-limit  -> rotate to the next key, then back off
-      503 / 5xx / overload      -> SAME key (rotating doesn't help backend load),
-                                   back off; after 3 strikes cool down and switch
-                                   to the fallback model
-      400 / 401 / 403           -> not transient, raise immediately
+      503 / 5xx  -> model OVERLOAD: keep the SAME key, back off; after 2 consecutive
+                    503s on the current model, switch to the fallback model. If both
+                    fail, raise (the caller skips just that article and continues).
+      429        -> quota / rate-limit: rotate to the next key + back off; if ALL
+                    keys are 429, sleep a longer cooldown instead of looping fast.
+      400/401/403-> not transient, raise immediately.
   * Always requests JSON; tolerates code fences / stray text around the JSON.
 
-Env knobs (all optional): GEMINI_MODEL, GEMINI_FALLBACK_MODEL,
+Env knobs (all optional): GEMINI_MODEL, GEMINI_FALLBACK_MODEL / GEMINI_MODEL_FALLBACK,
 GEMINI_MIN_SECONDS_BETWEEN_CALLS, GEMINI_MAX_RETRIES, GEMINI_RETRY_BASE_SECONDS,
-GEMINI_RETRY_MAX_SECONDS, GEMINI_RETRY_JITTER, GEMINI_COOLDOWN_AFTER_503_SECONDS.
+GEMINI_RETRY_MAX_SECONDS, GEMINI_RETRY_JITTER, GEMINI_COOLDOWN_AFTER_429_SECONDS.
 """
 from __future__ import annotations
 
@@ -34,6 +35,7 @@ from core import load_settings
 logger = logging.getLogger(__name__)
 
 NON_RETRYABLE_CODES = (400, 401, 403)  # bad request / auth — never transient
+DEFAULT_FALLBACK_MODEL = "gemini-2.5-flash-lite"
 
 
 class GeminiError(RuntimeError):
@@ -50,24 +52,32 @@ class GeminiClient:
             raise GeminiError("no Gemini API key set (GEMINI_API_KEY / GEMINI_API_KEY_2 ...)")
         self._clients = [genai.Client(api_key=k) for k in keys]
         self._idx = 0
+
         self._model = (model or os.environ.get("GEMINI_MODEL")
                        or settings.get("gemini_model") or "gemini-2.5-flash")
-        # Fallback model: respect an EXPLICIT empty value (= no fallback, rotate keys
-        # instead). Only default to a value when the key is entirely unset.
-        fallback = os.environ.get("GEMINI_FALLBACK_MODEL")
-        if fallback is None:
-            fallback = settings.get("gemini_fallback_model") or ""
-        self._fallback_model = fallback.strip()
+        # Fallback model: accept EITHER env spelling; never end up empty (defaults to lite).
+        self._fallback_model = (
+            os.environ.get("GEMINI_FALLBACK_MODEL")
+            or os.environ.get("GEMINI_MODEL_FALLBACK")
+            or settings.get("gemini_fallback_model")
+            or DEFAULT_FALLBACK_MODEL
+        ).strip()
+
         self._min_between = _env_float("GEMINI_MIN_SECONDS_BETWEEN_CALLS",
-                                       settings.get("sleep_between_calls_seconds", 25))
+                                       settings.get("sleep_between_calls_seconds", 30))
         self._max_retries = _env_int("GEMINI_MAX_RETRIES", 5)
-        self._retry_base = _env_float("GEMINI_RETRY_BASE_SECONDS", 20)
+        self._retry_base = _env_float("GEMINI_RETRY_BASE_SECONDS", 30)
         self._retry_max = _env_float("GEMINI_RETRY_MAX_SECONDS", 300)
         self._jitter = _env_bool("GEMINI_RETRY_JITTER", True)
-        self._cooldown_503 = _env_float("GEMINI_COOLDOWN_AFTER_503_SECONDS", 180)
-        logger.info("Gemini: %d key(s) | model=%s fallback=%s | min_gap=%.0fs retries=%d",
-                    len(self._clients), self._model, self._fallback_model,
-                    self._min_between, self._max_retries)
+        self._cooldown_429 = _env_float("GEMINI_COOLDOWN_AFTER_429_SECONDS", 90)
+
+        logger.info(
+            "Gemini ready | keys=%d | primary=%s | fallback=%s | min_gap=%.0fs | "
+            "retries=%d | backoff=%.0f-%.0fs | jitter=%s | 429_cooldown=%.0fs",
+            len(self._clients), self._model, self._fallback_model, self._min_between,
+            self._max_retries, self._retry_base, self._retry_max, self._jitter,
+            self._cooldown_429,
+        )
 
     def generate_json(self, prompt: str, system: str | None = None) -> dict:
         """Call Gemini and return its response parsed as a JSON object."""
@@ -81,7 +91,8 @@ class GeminiClient:
         """Invoke the model with error-aware retries, key rotation and fallback."""
         model = self._model
         switched = False
-        overload_streak = 0
+        overload_streak = 0          # consecutive 503/5xx on the current model
+        rate_streak = 0              # consecutive 429s (across key rotations)
         key_idx = self._idx          # round-robin a starting key for THIS call
         self._idx += 1
 
@@ -97,23 +108,34 @@ class GeminiClient:
                 code = getattr(exc, "code", None)
                 if code in NON_RETRYABLE_CODES or attempt > self._max_retries:
                     raise
-                # Both 429 (quota) and 503/5xx (overload): try the NEXT key on the
-                # SAME (good) model. We do NOT silently drop to a weaker model — a
-                # fallback model is used only if one is explicitly configured
-                # (GEMINI_FALLBACK_MODEL), because lite models tend to fail the
-                # article validator. With it empty, we just rotate keys + back off.
-                key_idx += 1
-                if code != 429:
+
+                if code == 429:                              # quota / rate limit
+                    overload_streak = 0
+                    rate_streak += 1
+                    key_idx += 1                             # rotate to the next key
+                    if rate_streak >= len(self._clients):    # every key is limited
+                        logger.warning("Gemini 429 on all %d key(s); cooling down %ds",
+                                       len(self._clients), int(self._cooldown_429))
+                        time.sleep(self._cooldown_429)
+                        rate_streak = 0
+                    else:
+                        logger.warning("Gemini 429 quota; rotating key, backoff (attempt %d/%d)",
+                                       attempt, self._max_retries)
+                        self._backoff(attempt)
+                else:                                        # 503 / 5xx — model overload
+                    rate_streak = 0
                     overload_streak += 1
-                if (code != 429 and self._fallback_model and not switched
-                        and overload_streak >= 3):
-                    switched = True
-                    model = self._fallback_model
-                    logger.warning("Gemini %s persists; switching to fallback model %s", code, model)
-                kind = "429 quota" if code == 429 else f"{code} overload"
-                logger.warning("Gemini %s; rotating key, backoff (attempt %d/%d, model=%s)",
-                               kind, attempt, self._max_retries, model)
-                self._backoff(attempt)
+                    # Two strikes on the current model -> move to the fallback model
+                    # (NOT a key rotation: a 503 is backend capacity, not the key).
+                    if overload_streak >= 2 and self._fallback_model and not switched:
+                        switched = True
+                        overload_streak = 0
+                        model = self._fallback_model
+                        logger.warning("Gemini %s x2 on primary; switching to fallback model %s",
+                                       code, model)
+                    logger.warning("Gemini %s overload; backoff same key (attempt %d/%d, model=%s)",
+                                   code, attempt, self._max_retries, model)
+                    self._backoff(attempt)
         raise GeminiError("exhausted Gemini retries")  # unreachable safeguard
 
     def _backoff(self, attempt: int) -> None:

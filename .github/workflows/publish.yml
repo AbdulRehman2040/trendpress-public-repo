@@ -1,9 +1,9 @@
 name: trendpress publish
 
 # Runs the staggered publish flow every 3 hours (UTC) and on manual dispatch.
-# Each site publishes one at a time with a 10-minute gap; one email digest with
-# all links is sent at the end. Posts land as 'pending' (review_mode in
-# config/settings.yaml), so nothing goes public without your approval.
+# Each site publishes one at a time with a STAGGER_GAP_MIN gap; one email digest
+# with all links is sent at the end. Posts go LIVE immediately
+# (review_mode: live in config/settings.yaml) — direct publish.
 on:
   schedule:
     - cron: "0 */3 * * *"     # 00:00, 03:00, 06:00 ... UTC
@@ -65,11 +65,13 @@ jobs:
           ADMIN_MAIL:    ${{ secrets.ADMIN_MAIL }}
           # Non-secret tuning (edit here, no secrets needed):
           GEMINI_MODEL: gemini-2.5-flash
-          GEMINI_FALLBACK_MODEL: ""       # empty: never drop to lite; rotate keys on 503 instead
-          GEMINI_MIN_SECONDS_BETWEEN_CALLS: "10"
+          GEMINI_FALLBACK_MODEL: gemini-2.5-flash-lite
+          GEMINI_MODEL_FALLBACK: gemini-2.5-flash-lite   # alias accepted too (cannot show empty)
+          GEMINI_MIN_SECONDS_BETWEEN_CALLS: "30"
           GEMINI_MAX_RETRIES: "5"
-          GEMINI_RETRY_BASE_SECONDS: "12"
-          GEMINI_RETRY_MAX_SECONDS: "60"
+          GEMINI_RETRY_BASE_SECONDS: "30"
+          GEMINI_RETRY_MAX_SECONDS: "300"
           GEMINI_RETRY_JITTER: "true"
-          STAGGER_GAP_MIN: "3"      # use "4" once you reach ~15 sites
+          GEMINI_COOLDOWN_AFTER_429_SECONDS: "90"
+          STAGGER_GAP_MIN: "4"
         run: python main.py --stagger
