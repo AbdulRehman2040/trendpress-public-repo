@@ -1,0 +1,225 @@
+# Site network profiles for trendpress.
+#
+# Top level is a LIST of site entries. The application password lives in the env
+# var named by `app_password_env` (see .env), never here. `niche` drives
+# topic->site matching, so each city site states its locale + general UK remit.
+#
+# status: active | canary | paused   (paused sites are skipped by the daily run)
+
+- id: site1
+  name: "London Headline"
+  url: "https://londonheadline.uk"
+  wp_username: "News Desk"
+  app_password_env: "WP_PASS_SITE1"
+  niche: >
+    Fast, accessible London and UK news for a general British audience. Covers
+    breaking national news, football and other sport, entertainment and
+    celebrity stories, and major human-interest and politics-as-news topics.
+  audience: "London and UK news readers wanting quick, clear coverage of the day's big stories"
+  tone: "clear, factual, neutral newsroom style"
+  angle_pool:
+    - "news report"
+    - "what we know so far"
+    - "London angle"
+    - "background and context"
+    - "reaction roundup"
+  word_range: [600, 900]
+  posts_per_day_cap: 2
+  status: active
+
+- id: site2
+  name: "The London Hub"
+  url: "https://thelondonhub.co.uk"
+  wp_username: "News Desk"
+  app_password_env: "WP_PASS_SITE2"
+  niche: >
+    London-focused news and what's-on for the capital's readers, alongside the
+    big UK national stories — politics, sport, entertainment and human interest.
+  audience: "Londoners and UK readers following the day's news"
+  tone: "clear, factual, neutral newsroom style"
+  angle_pool:
+    - "news report"
+    - "London angle"
+    - "what we know so far"
+    - "background and context"
+    - "reaction roundup"
+  word_range: [600, 900]
+  posts_per_day_cap: 2
+  status: paused          # auth failed (401) — re-check WP_PASS_SITE2 / username, then set active
+
+- id: site3
+  name: "Leeds Bulletin"
+  url: "https://leedsbulletin.co.uk"
+  wp_username: "News Desk"
+  app_password_env: "WP_PASS_SITE3"
+  niche: >
+    News for Leeds and the wider Yorkshire region — local stories and council,
+    transport and community news, plus UK national news, sport and entertainment.
+  audience: "Leeds and Yorkshire readers, plus a general UK news audience"
+  tone: "clear, factual, neutral newsroom style"
+  angle_pool:
+    - "news report"
+    - "local Yorkshire angle"
+    - "what we know so far"
+    - "background and context"
+    - "reaction roundup"
+  word_range: [600, 900]
+  posts_per_day_cap: 2
+  status: active
+
+- id: site4
+  name: "Manchester Pulse"
+  url: "https://manchesterpulse.co.uk"
+  wp_username: "News Desk"
+  app_password_env: "WP_PASS_SITE4"
+  niche: >
+    News for Manchester and Greater Manchester — local stories, culture and
+    football, alongside the day's big UK national news, sport and entertainment.
+  audience: "Manchester and Greater Manchester readers, plus a general UK audience"
+  tone: "clear, factual, neutral newsroom style"
+  angle_pool:
+    - "news report"
+    - "local Manchester angle"
+    - "what we know so far"
+    - "background and context"
+    - "reaction roundup"
+  word_range: [600, 900]
+  posts_per_day_cap: 2
+  status: active
+
+- id: site5
+  name: "Birmingham Wave"
+  url: "https://birminghamwave.co.uk"
+  wp_username: "News Desk"
+  app_password_env: "WP_PASS_SITE5"
+  niche: >
+    News for Birmingham and the West Midlands — local and community stories,
+    plus UK national news, football and other sport, and entertainment.
+  audience: "Birmingham and West Midlands readers, plus a general UK audience"
+  tone: "clear, factual, neutral newsroom style"
+  angle_pool:
+    - "news report"
+    - "local Midlands angle"
+    - "what we know so far"
+    - "background and context"
+    - "reaction roundup"
+  word_range: [600, 900]
+  posts_per_day_cap: 2
+  status: active
+
+- id: site6
+  name: "Liverpool Briefs"
+  url: "https://liverpoolbriefs.co.uk"
+  wp_username: "News Desk"
+  app_password_env: "WP_PASS_SITE6"
+  niche: >
+    News for Liverpool and Merseyside — local stories, culture and football,
+    alongside the big UK national news, sport and entertainment of the day.
+  audience: "Liverpool and Merseyside readers, plus a general UK audience"
+  tone: "clear, factual, neutral newsroom style"
+  angle_pool:
+    - "news report"
+    - "local Merseyside angle"
+    - "what we know so far"
+    - "background and context"
+    - "reaction roundup"
+  word_range: [600, 900]
+  posts_per_day_cap: 2
+  status: active
+
+- id: site7
+  name: "Bristol Press"
+  url: "https://bristolpress.uk"
+  wp_username: "News Desk"
+  app_password_env: "WP_PASS_SITE7"
+  niche: >
+    News for Bristol and the South West — local and community stories, plus the
+    day's UK national news, sport and entertainment.
+  audience: "Bristol and South West readers, plus a general UK audience"
+  tone: "clear, factual, neutral newsroom style"
+  angle_pool:
+    - "news report"
+    - "local South West angle"
+    - "what we know so far"
+    - "background and context"
+    - "reaction roundup"
+  word_range: [600, 900]
+  posts_per_day_cap: 2
+  status: active
+
+- id: site8
+  name: "Manchester Update"
+  url: "https://manchesterupdate.co.uk"
+  wp_username: "News Desk"
+  app_password_env: "WP_PASS_SITE8"
+  niche: >
+    Rolling news for Manchester and the North West — local updates, transport
+    and football, alongside major UK national news, sport and entertainment.
+  audience: "Manchester and North West readers, plus a general UK audience"
+  tone: "clear, factual, neutral newsroom style"
+  angle_pool:
+    - "news report"
+    - "local North West angle"
+    - "what we know so far"
+    - "background and context"
+    - "reaction roundup"
+  word_range: [600, 900]
+  posts_per_day_cap: 2
+  status: active
+
+- id: site9
+  name: "Glasgow Flux"
+  url: "https://glasgowflux.co.uk"
+  wp_username: "News Desk"
+  app_password_env: "WP_PASS_SITE9"
+  niche: >
+    News for Glasgow and Scotland — local and community stories, Scottish
+    politics and football, plus UK-wide national news and entertainment.
+  audience: "Glasgow and Scotland readers, plus a general UK audience"
+  tone: "clear, factual, neutral newsroom style"
+  angle_pool:
+    - "news report"
+    - "local Scotland angle"
+    - "what we know so far"
+    - "background and context"
+    - "reaction roundup"
+  word_range: [600, 900]
+  posts_per_day_cap: 2
+  status: active
+
+- id: site10
+  name: "Oxford Reporter"
+  url: "https://oxfordreporter.co.uk"
+  wp_username: "News Desk"
+  app_password_env: "WP_PASS_SITE10"
+  niche: >
+    News for Oxford and Oxfordshire — local stories, the university and
+    community, alongside the day's UK national news, sport and entertainment.
+  audience: "Oxford and Oxfordshire readers, plus a general UK audience"
+  tone: "clear, factual, neutral newsroom style"
+  angle_pool:
+    - "news report"
+    - "local Oxfordshire angle"
+    - "what we know so far"
+    - "background and context"
+    - "reaction roundup"
+  word_range: [600, 900]
+  posts_per_day_cap: 2
+  status: active
+
+# --- TEMPLATE -------------------------------------------------------------
+# - id: siteN
+#   name: "Human Readable Name"
+#   url: "https://example.com"               # https, NO trailing slash
+#   wp_username: "News Desk"
+#   app_password_env: "WP_PASS_SITEN"        # env var holding the WP app password
+#   niche: >
+#     2-3 sentences on what this site covers and for whom (locale + remit).
+#   audience: "who reads this site"
+#   tone: "3-4 adjectives describing the voice"
+#   angle_pool:
+#     - "news report"
+#     - "local angle"
+#   word_range: [600, 900]
+#   posts_per_day_cap: 2
+#   status: active                           # active | canary | paused

@@ -1,0 +1,33 @@
+# Global runtime settings for trendpress. Edit freely; all keys have defaults
+# baked into the code, but keeping them here documents the knobs explicitly.
+
+geo: "GB"                              # Google Trends region (ISO country code)
+# Pinned, stable model ids (NOT *-latest aliases). Env GEMINI_MODEL /
+# GEMINI_FALLBACK_MODEL override these. Fallback is used when 503 overload persists.
+gemini_model: "gemini-2.5-flash"
+gemini_fallback_model: "gemini-2.5-flash-lite"
+
+# Pacing / quotas — min seconds between Gemini calls (env GEMINI_MIN_SECONDS_BETWEEN_CALLS overrides)
+sleep_between_calls_seconds: 25
+
+# Topic -> site matching
+max_sites_per_topic: 4                  # cap how many sites may run the same trend
+min_match_score: 7                      # 0-10 relevance threshold to assign a trend
+dedupe_window_days: 7                   # don't reuse a trend within this many days
+
+# Editorial review gate before publishing
+review_mode: "live"                     # live | pending | sample | auto
+                                        #   live    = publish immediately (public)
+                                        #   pending = draft awaiting human approval
+                                        #   sample  = sample_rate pending, rest scheduled
+                                        #   auto    = all scheduled in the publish window
+sample_rate: 0.1                        # fraction held as pending when review_mode = sample
+
+# When publishing is allowed (local site time)
+publish_window:
+  start: "09:00"
+  end: "18:00"
+  timezone: "Europe/London"
+
+# Per-site output ceiling fallback (used when a site omits posts_per_day_cap)
+posts_per_day_cap_default: 2

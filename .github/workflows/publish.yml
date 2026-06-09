@@ -1,0 +1,76 @@
+name: trendpress publish
+
+# Runs the staggered publish flow every 3 hours (UTC) and on manual dispatch.
+# Each site publishes one at a time with a 10-minute gap; one email digest with
+# all links is sent at the end. Posts land as 'pending' (review_mode in
+# config/settings.yaml), so nothing goes public without your approval.
+on:
+  schedule:
+    - cron: "0 */3 * * *"     # 00:00, 03:00, 06:00 ... UTC
+  workflow_dispatch: {}        # lets you run it by hand from the Actions tab
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trendpress-publish    # never let two runs overlap
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180        # 9 sites x 10-min gaps fits comfortably
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Persist the dedup database (used_topics / used_images / posts) across runs.
+      # Ephemeral runners lose disk between runs, so without this the same trends
+      # could be re-published. See the caveats in SETUP.md.
+      - name: Restore state (data/)
+        uses: actions/cache@v4
+        with:
+          path: data
+          key: trendpress-state-${{ github.run_id }}
+          restore-keys: |
+            trendpress-state-
+
+      - name: Run staggered publish
+        env:
+          GEMINI_API_KEY:   ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
+          GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
+          GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
+          PEXELS_API_KEY:   ${{ secrets.PEXELS_API_KEY }}
+          WP_PASS_SITE1:  ${{ secrets.WP_PASS_SITE1 }}
+          WP_PASS_SITE2:  ${{ secrets.WP_PASS_SITE2 }}
+          WP_PASS_SITE3:  ${{ secrets.WP_PASS_SITE3 }}
+          WP_PASS_SITE4:  ${{ secrets.WP_PASS_SITE4 }}
+          WP_PASS_SITE5:  ${{ secrets.WP_PASS_SITE5 }}
+          WP_PASS_SITE6:  ${{ secrets.WP_PASS_SITE6 }}
+          WP_PASS_SITE7:  ${{ secrets.WP_PASS_SITE7 }}
+          WP_PASS_SITE8:  ${{ secrets.WP_PASS_SITE8 }}
+          WP_PASS_SITE9:  ${{ secrets.WP_PASS_SITE9 }}
+          WP_PASS_SITE10: ${{ secrets.WP_PASS_SITE10 }}
+          SMTP_HOST:     ${{ secrets.SMTP_HOST }}
+          SMTP_PORT:     ${{ secrets.SMTP_PORT }}
+          SMTP_USER:     ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          ADMIN_MAIL:    ${{ secrets.ADMIN_MAIL }}
+          # Non-secret tuning (edit here, no secrets needed):
+          GEMINI_MODEL: gemini-2.5-flash
+          GEMINI_FALLBACK_MODEL: gemini-2.5-flash-lite
+          GEMINI_MIN_SECONDS_BETWEEN_CALLS: "25"
+          GEMINI_MAX_RETRIES: "5"
+          GEMINI_RETRY_BASE_SECONDS: "20"
+          GEMINI_RETRY_MAX_SECONDS: "300"
+          GEMINI_RETRY_JITTER: "true"
+          GEMINI_COOLDOWN_AFTER_503_SECONDS: "180"
+          STAGGER_GAP_MIN: "3"      # use "4" once you reach ~15 sites
+        run: python main.py --stagger
