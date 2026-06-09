@@ -52,8 +52,12 @@ class GeminiClient:
         self._idx = 0
         self._model = (model or os.environ.get("GEMINI_MODEL")
                        or settings.get("gemini_model") or "gemini-2.5-flash")
-        self._fallback_model = (os.environ.get("GEMINI_FALLBACK_MODEL")
-                                or settings.get("gemini_fallback_model") or "gemini-2.5-flash-lite")
+        # Fallback model: respect an EXPLICIT empty value (= no fallback, rotate keys
+        # instead). Only default to a value when the key is entirely unset.
+        fallback = os.environ.get("GEMINI_FALLBACK_MODEL")
+        if fallback is None:
+            fallback = settings.get("gemini_fallback_model") or ""
+        self._fallback_model = fallback.strip()
         self._min_between = _env_float("GEMINI_MIN_SECONDS_BETWEEN_CALLS",
                                        settings.get("sleep_between_calls_seconds", 25))
         self._max_retries = _env_int("GEMINI_MAX_RETRIES", 5)
@@ -93,23 +97,23 @@ class GeminiClient:
                 code = getattr(exc, "code", None)
                 if code in NON_RETRYABLE_CODES or attempt > self._max_retries:
                     raise
-                if code == 429:                           # quota / rate limit
-                    key_idx += 1                          # rotate key
-                    logger.warning("Gemini 429 quota; rotating key, backoff (attempt %d/%d)",
-                                   attempt, self._max_retries)
-                    self._backoff(attempt)
-                else:                                     # 503 / 5xx overload
+                # Both 429 (quota) and 503/5xx (overload): try the NEXT key on the
+                # SAME (good) model. We do NOT silently drop to a weaker model — a
+                # fallback model is used only if one is explicitly configured
+                # (GEMINI_FALLBACK_MODEL), because lite models tend to fail the
+                # article validator. With it empty, we just rotate keys + back off.
+                key_idx += 1
+                if code != 429:
                     overload_streak += 1
-                    if overload_streak >= 3 and self._fallback_model and not switched:
-                        switched = True
-                        model = self._fallback_model
-                        logger.warning("Gemini %s persists; cooling down %ds, then fallback model %s",
-                                       code, int(self._cooldown_503), model)
-                        time.sleep(self._cooldown_503)
-                    else:
-                        logger.warning("Gemini %s overload; backoff same key (attempt %d/%d, model=%s)",
-                                       code, attempt, self._max_retries, model)
-                        self._backoff(attempt)
+                if (code != 429 and self._fallback_model and not switched
+                        and overload_streak >= 3):
+                    switched = True
+                    model = self._fallback_model
+                    logger.warning("Gemini %s persists; switching to fallback model %s", code, model)
+                kind = "429 quota" if code == 429 else f"{code} overload"
+                logger.warning("Gemini %s; rotating key, backoff (attempt %d/%d, model=%s)",
+                               kind, attempt, self._max_retries, model)
+                self._backoff(attempt)
         raise GeminiError("exhausted Gemini retries")  # unreachable safeguard
 
     def _backoff(self, attempt: int) -> None:

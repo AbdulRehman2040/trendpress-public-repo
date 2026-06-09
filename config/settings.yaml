@@ -5,7 +5,7 @@ geo: "GB"                              # Google Trends region (ISO country code)
 # Pinned, stable model ids (NOT *-latest aliases). Env GEMINI_MODEL /
 # GEMINI_FALLBACK_MODEL override these. Fallback is used when 503 overload persists.
 gemini_model: "gemini-2.5-flash"
-gemini_fallback_model: "gemini-2.5-flash-lite"
+gemini_fallback_model: ""               # empty = never degrade to a weaker model; rotate keys instead
 
 # Pacing / quotas — min seconds between Gemini calls (env GEMINI_MIN_SECONDS_BETWEEN_CALLS overrides)
 sleep_between_calls_seconds: 25
