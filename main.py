@@ -182,6 +182,9 @@ def run_staggered(args: argparse.Namespace) -> None:
     # then write/image/publish per site with a gap, so they don't post simultaneously.
     found = trends.get_safe_trends(settings, db, gemini)
     assignments = matcher.assign_topics(found, sites, settings, gemini)
+    # Never run empty: give every active site a trend even if the AI matcher
+    # scored few/none (e.g. niche-mismatched trends, or a Gemini outage).
+    assignments = matcher.fill_uncovered(assignments, found, sites, settings)
     by_site: dict[str, list] = {}
     for assignment in assignments:
         by_site.setdefault(assignment.site_id, []).append(assignment)

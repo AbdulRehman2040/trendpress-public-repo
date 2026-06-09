@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import Counter
 from typing import TYPE_CHECKING, Any
 
 from core import db
@@ -58,6 +59,35 @@ def assign_topics(
     assignments = _select(scores, trends, sites, settings)
     for line in _summary_lines(assignments):
         logger.info("%s", line)
+    return assignments
+
+
+def fill_uncovered(
+    assignments: list[Assignment], trends: list[Trend], sites: list[dict], settings: dict,
+) -> list[Assignment]:
+    """Guarantee every active site gets at least ONE assignment so a run is never
+    empty. Any site the AI matcher left uncovered is given the currently
+    least-used trend (round-robin), with a local angle. Used by the staggered run.
+    """
+    active = [s for s in sites if s.get("status") != "paused"]
+    if not trends or not active:
+        return assignments
+    covered = {a.site_id for a in assignments}
+    uncovered = [s for s in active if s.get("id") not in covered]
+    if not uncovered:
+        return assignments
+
+    use_count: Counter = Counter(a.trend.trend_id for a in assignments)
+    for trend in trends:
+        use_count.setdefault(trend.trend_id, 0)
+    for site in uncovered:
+        trend = min(trends, key=lambda t: use_count[t.trend_id])  # least-used -> spread
+        use_count[trend.trend_id] += 1
+        angle = (site.get("angle_pool") or ["news report"])[0]
+        assignments.append(Assignment(trend=trend, site_id=site["id"],
+                                      score=int(settings.get("min_match_score", 5)), angle=angle))
+    logger.info("matcher: round-robin filled %d uncovered site(s) (never run empty)",
+                len(uncovered))
     return assignments
 
 
