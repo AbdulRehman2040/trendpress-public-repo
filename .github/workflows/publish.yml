@@ -66,11 +66,10 @@ jobs:
           # Non-secret tuning (edit here, no secrets needed):
           GEMINI_MODEL: gemini-2.5-flash
           GEMINI_FALLBACK_MODEL: ""       # empty: never drop to lite; rotate keys on 503 instead
-          GEMINI_MIN_SECONDS_BETWEEN_CALLS: "25"
+          GEMINI_MIN_SECONDS_BETWEEN_CALLS: "10"
           GEMINI_MAX_RETRIES: "5"
-          GEMINI_RETRY_BASE_SECONDS: "20"
-          GEMINI_RETRY_MAX_SECONDS: "300"
+          GEMINI_RETRY_BASE_SECONDS: "12"
+          GEMINI_RETRY_MAX_SECONDS: "60"
           GEMINI_RETRY_JITTER: "true"
-          GEMINI_COOLDOWN_AFTER_503_SECONDS: "180"
           STAGGER_GAP_MIN: "3"      # use "4" once you reach ~15 sites
         run: python main.py --stagger

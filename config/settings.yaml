@@ -8,10 +8,10 @@ gemini_model: "gemini-2.5-flash"
 gemini_fallback_model: ""               # empty = never degrade to a weaker model; rotate keys instead
 
 # Pacing / quotas — min seconds between Gemini calls (env GEMINI_MIN_SECONDS_BETWEEN_CALLS overrides)
-sleep_between_calls_seconds: 25
+sleep_between_calls_seconds: 10
 
 # Topic -> site matching
-max_sites_per_topic: 4                  # cap how many sites may run the same trend
+max_sites_per_topic: 1                  # 1 = each trend goes to ONE site (unique, no duplicate broadcast)
 min_match_score: 7                      # 0-10 relevance threshold to assign a trend
 dedupe_window_days: 7                   # don't reuse a trend within this many days
 
