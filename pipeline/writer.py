@@ -276,13 +276,9 @@ def _validate(raw: Any, trend: Trend, target_words: int) -> list[str]:
     if "html_content" in [e.split(": ")[-1] for e in errors]:
         return errors  # no html to inspect further
 
-    title = str(raw.get("title", ""))
-    if len(title) > 60:
-        errors.append(f"title too long ({len(title)} > 60 chars)")
-    meta = str(raw.get("meta_description", ""))
-    if len(meta) > 155:
-        errors.append(f"meta_description too long ({len(meta)} > 155 chars)")
-
+    # NOTE: title / meta_description length are NOT validated here — they are
+    # trimmed to spec in _build_package so an otherwise-good article is never
+    # skipped over a few extra characters.
     html = str(raw.get("html_content", ""))
     h2_count = len(re.findall(r"<h2[\s>]", html, re.IGNORECASE))
     if h2_count < 3:
@@ -311,6 +307,17 @@ def _word_count(html: str) -> int:
     return len(text.split())
 
 
+def _trim(text: str, limit: int) -> str:
+    """Trim to <= limit chars on a word boundary (so titles/metas never get skipped)."""
+    text = " ".join(str(text).split())  # collapse whitespace
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    if " " in cut:
+        cut = cut[:cut.rfind(" ")]
+    return cut.rstrip(" ,;:-—")
+
+
 # --------------------------------------------------------------------------- #
 # Build the ArticlePackage (+ FAQ JSON-LD)
 # --------------------------------------------------------------------------- #
@@ -325,9 +332,9 @@ def _build_package(raw: dict, assignment: Assignment) -> ArticlePackage:
     return ArticlePackage(
         site_id=assignment.site_id,
         trend_id=assignment.trend.trend_id,
-        title=str(raw["title"]).strip(),
+        title=_trim(str(raw["title"]), 60),
         slug=_slugify(raw.get("slug") or raw["title"]),
-        meta_description=str(raw["meta_description"]).strip(),
+        meta_description=_trim(str(raw["meta_description"]), 155),
         focus_keyword=str(raw.get("focus_keyword", "")).strip(),
         tags=tags,
         category=str(raw.get("category", "")).strip() or "News",

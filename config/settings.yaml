@@ -11,8 +11,8 @@ gemini_fallback_model: ""               # empty = never degrade to a weaker mode
 sleep_between_calls_seconds: 10
 
 # Topic -> site matching
-max_sites_per_topic: 1                  # 1 = each trend goes to ONE site (unique, no duplicate broadcast)
-min_match_score: 7                      # 0-10 relevance threshold to assign a trend
+max_sites_per_topic: 3                  # a trend may run on up to this many sites (each gets a local angle)
+min_match_score: 5                      # 0-10 relevance threshold (lower = more trends qualify -> more sites filled)
 dedupe_window_days: 7                   # don't reuse a trend within this many days
 
 # Editorial review gate before publishing
