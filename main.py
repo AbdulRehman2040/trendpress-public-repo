@@ -16,10 +16,12 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import io
 import logging
 import os
 import sys
 import time
+import traceback
 from logging.handlers import RotatingFileHandler
 
 from dotenv import load_dotenv
@@ -76,6 +78,11 @@ def select_sites(args: argparse.Namespace, skip_paused: bool = True) -> list[dic
             else:
                 kept.append(s)
         sites = kept
+    if not sites:
+        logger.warning(
+            "No sites selected. If the Neon 'sites' table is empty, run "
+            "`python scripts/import_sites.py` once to seed it from config/sites.yaml."
+        )
     return sites
 
 
@@ -98,6 +105,25 @@ def build_gemini():
         return None
 
 
+def _attach_run_log() -> tuple[logging.Handler, io.StringIO]:
+    """Tee all log output into an in-memory buffer for this run (stored in runs.log)."""
+    buffer = io.StringIO()
+    handler = logging.StreamHandler(buffer)
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)-7s %(name)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+    logging.getLogger().addHandler(handler)
+    return handler, buffer
+
+
+def _detach_run_log(handler: logging.Handler | None, buffer: io.StringIO | None) -> str | None:
+    """Detach the capture handler and return the last ~8000 chars of the run log."""
+    if handler is not None:
+        logging.getLogger().removeHandler(handler)
+    if buffer is None:
+        return None
+    return buffer.getvalue()[-8000:]
+
+
 def run_daily(args: argparse.Namespace) -> None:
     """Run the full pipeline: trends → matcher → writer → images → publisher → digest."""
     settings = load_settings()
@@ -109,26 +135,53 @@ def run_daily(args: argparse.Namespace) -> None:
         args.dry_run, ", ".join(s.get("id", "?") for s in sites) or "none",
     )
 
-    found = trends.get_safe_trends(settings, db, gemini)
-    if args.dry_run:
-        logger.info("Safe trends (%d):\n%s", len(found), trends.render_trends_table(found))
-    assignments = matcher.assign_topics(found, sites, settings, gemini)
-    if args.dry_run:
-        logger.info("Assignment plan (%d):\n%s", len(assignments), matcher.render_plan(assignments))
-    packages = writer.write_articles(assignments, sites, settings, gemini, db)
-    media_map = images.attach_images(packages, sites, settings, db, dry_run=args.dry_run)
-    if args.dry_run and packages:
-        paths = [writer.write_preview(p) for p in packages]
-        logger.info("Wrote %d preview file(s) to %s", len(paths), writer.PREVIEW_DIR)
-    results = publisher.publish(packages, media_map, sites, settings, db, dry_run=args.dry_run)
+    # Record the run for the dashboard (real runs only — dry-run never writes).
+    run_id, log_handler, log_buffer = None, None, None
+    if not args.dry_run:
+        run_id = db.start_run(trigger=os.getenv("RUN_TRIGGER", "cron"))
+        log_handler, log_buffer = _attach_run_log()
+    status, error_summary = "success", None
+    found = assignments = packages = results = []
+    media_map = {}
 
-    digest = _build_digest(args, found, assignments, packages, results, media_map, sites)
-    notify.send_digest(digest, settings)
+    try:
+        found = trends.get_safe_trends(settings, db, gemini)
+        if args.dry_run:
+            logger.info("Safe trends (%d):\n%s", len(found), trends.render_trends_table(found))
+        assignments = matcher.assign_topics(found, sites, settings, gemini)
+        if args.dry_run:
+            logger.info("Assignment plan (%d):\n%s", len(assignments), matcher.render_plan(assignments))
+        packages = writer.write_articles(assignments, sites, settings, gemini, db)
+        media_map = images.attach_images(packages, sites, settings, db, dry_run=args.dry_run)
+        if args.dry_run and packages:
+            paths = [writer.write_preview(p) for p in packages]
+            logger.info("Wrote %d preview file(s) to %s", len(paths), writer.PREVIEW_DIR)
+        results = publisher.publish(packages, media_map, sites, settings, db,
+                                    dry_run=args.dry_run, run_id=run_id)
 
-    logger.info(
-        "Daily run complete | trends=%d assignments=%d articles=%d results=%d",
-        len(found), len(assignments), len(packages), len(results),
-    )
+        digest = _build_digest(args, found, assignments, packages, results, media_map, sites)
+        notify.send_digest(digest, settings)
+
+        if any(r.status == "error" for r in results):
+            status = "partial"
+        logger.info(
+            "Daily run complete | trends=%d assignments=%d articles=%d results=%d",
+            len(found), len(assignments), len(packages), len(results),
+        )
+    except Exception:
+        status, error_summary = "failed", traceback.format_exc()[-4000:]
+        logger.exception("Daily run failed")
+        raise
+    finally:
+        if run_id is not None:
+            db.finish_run(
+                run_id, status,
+                trends_found=len(found), articles_written=len(packages),
+                posts_published=sum(1 for r in results
+                                    if r.status != "error" and not r.status.startswith("would-")),
+                posts_failed=sum(1 for r in results if r.status == "error"),
+                error_summary=error_summary, log=_detach_run_log(log_handler, log_buffer),
+            )
 
 
 def _build_digest(args, found, assignments, packages, results, media_map, sites) -> dict:
@@ -178,62 +231,88 @@ def run_staggered(args: argparse.Namespace) -> None:
     logger.info("Staggered run | dry_run=%s | sites=%d | gap=%dmin",
                 args.dry_run, len(sites), gap)
 
-    # One safety call + ONE matcher call for the whole network (fewer Gemini calls);
-    # then write/image/publish per site with a gap, so they don't post simultaneously.
-    found = trends.get_safe_trends(settings, db, gemini)
-    assignments = matcher.assign_topics(found, sites, settings, gemini)
-    # Never run empty: give every active site a trend even if the AI matcher
-    # scored few/none (e.g. niche-mismatched trends, or a Gemini outage).
-    assignments = matcher.fill_uncovered(assignments, found, sites, settings)
-    by_site: dict[str, list] = {}
-    for assignment in assignments:
-        by_site.setdefault(assignment.site_id, []).append(assignment)
-    targets = [s for s in sites if by_site.get(s.get("id", ""))]  # only sites with work
-    logger.info("Staggered: %d trend(s) -> %d assignment(s) across %d site(s)",
-                len(found), len(assignments), len(targets))
-
+    # Record the run for the dashboard (real runs only — dry-run never writes).
+    run_id, log_handler, log_buffer = None, None, None
+    if not args.dry_run:
+        run_id = db.start_run(trigger=os.getenv("RUN_TRIGGER", "cron"))
+        log_handler, log_buffer = _attach_run_log()
+    status, error_summary = "success", None
+    found: list = []
     posts: list[dict] = []
     errors: list[str] = []
-    for i, site in enumerate(targets):
-        sid = site.get("id", "?")
-        site_assignments = by_site.get(sid, [])
-        logger.info("=== staggered [%d/%d] site %s (%d article(s)) ===",
-                    i + 1, len(targets), sid, len(site_assignments))
-        packages = writer.write_articles(site_assignments, [site], settings, gemini, db)
-        media_map = images.attach_images(packages, [site], settings, db, dry_run=args.dry_run)
-        if args.dry_run:
-            for pkg in packages:
-                writer.write_preview(pkg)
-        results = publisher.publish(packages, media_map, [site], settings, db, dry_run=args.dry_run)
+    articles_written = 0
 
-        site_url = str(site.get("url", "")).rstrip("/")
-        for pkg, res in zip(packages, results):
-            if res.status == "error":
-                errors.append(f"[{sid}] {pkg.title}: {res.error}")
-            else:
-                posts.append({
-                    "site": sid, "site_name": site.get("name"), "title": pkg.title,
-                    "status": res.status, "url": res.url,
-                    "edit_url": (f"{site_url}/wp-admin/post.php?post={res.wp_post_id}&action=edit"
-                                 if res.wp_post_id else None),
-                })
-        if gap and not args.dry_run and i < len(targets) - 1:
-            logger.info("waiting %d min before the next site...", gap)
-            time.sleep(gap * 60)
+    try:
+        # One safety call + ONE matcher call for the whole network (fewer Gemini calls);
+        # then write/image/publish per site with a gap, so they don't post simultaneously.
+        found = trends.get_safe_trends(settings, db, gemini)
+        assignments = matcher.assign_topics(found, sites, settings, gemini)
+        # Never run empty: give every active site a trend even if the AI matcher
+        # scored few/none (e.g. niche-mismatched trends, or a Gemini outage).
+        assignments = matcher.fill_uncovered(assignments, found, sites, settings)
+        by_site: dict[str, list] = {}
+        for assignment in assignments:
+            by_site.setdefault(assignment.site_id, []).append(assignment)
+        targets = [s for s in sites if by_site.get(s.get("id", ""))]  # only sites with work
+        logger.info("Staggered: %d trend(s) -> %d assignment(s) across %d site(s)",
+                    len(found), len(assignments), len(targets))
 
-    skipped = ([t.title for t in found if not db.is_topic_used(t.trend_id, dedupe_days)]
-               if not args.dry_run else [])
-    digest = {
-        "title": f"{'[DRY-RUN] ' if args.dry_run else ''}trendpress — "
-                 f"{len(posts)} post(s), {len(errors)} error(s)",
-        "posts": posts,
-        "errors": errors,
-        "skipped_trends": skipped,
-        "missing_images": [],
-        "paused_sites": paused_site_ids(),
-    }
-    notify.send_digest(digest, settings)
-    logger.info("Staggered run complete | posts=%d errors=%d", len(posts), len(errors))
+        for i, site in enumerate(targets):
+            sid = site.get("id", "?")
+            site_assignments = by_site.get(sid, [])
+            logger.info("=== staggered [%d/%d] site %s (%d article(s)) ===",
+                        i + 1, len(targets), sid, len(site_assignments))
+            packages = writer.write_articles(site_assignments, [site], settings, gemini, db)
+            articles_written += len(packages)
+            media_map = images.attach_images(packages, [site], settings, db, dry_run=args.dry_run)
+            if args.dry_run:
+                for pkg in packages:
+                    writer.write_preview(pkg)
+            results = publisher.publish(packages, media_map, [site], settings, db,
+                                        dry_run=args.dry_run, run_id=run_id)
+
+            site_url = str(site.get("url", "")).rstrip("/")
+            for pkg, res in zip(packages, results):
+                if res.status == "error":
+                    errors.append(f"[{sid}] {pkg.title}: {res.error}")
+                else:
+                    posts.append({
+                        "site": sid, "site_name": site.get("name"), "title": pkg.title,
+                        "status": res.status, "url": res.url,
+                        "edit_url": (f"{site_url}/wp-admin/post.php?post={res.wp_post_id}&action=edit"
+                                     if res.wp_post_id else None),
+                    })
+            if gap and not args.dry_run and i < len(targets) - 1:
+                logger.info("waiting %d min before the next site...", gap)
+                time.sleep(gap * 60)
+
+        skipped = ([t.title for t in found if not db.is_topic_used(t.trend_id, dedupe_days)]
+                   if not args.dry_run else [])
+        digest = {
+            "title": f"{'[DRY-RUN] ' if args.dry_run else ''}trendpress — "
+                     f"{len(posts)} post(s), {len(errors)} error(s)",
+            "posts": posts,
+            "errors": errors,
+            "skipped_trends": skipped,
+            "missing_images": [],
+            "paused_sites": paused_site_ids(),
+        }
+        notify.send_digest(digest, settings)
+        if errors:
+            status = "partial"
+        logger.info("Staggered run complete | posts=%d errors=%d", len(posts), len(errors))
+    except Exception:
+        status, error_summary = "failed", traceback.format_exc()[-4000:]
+        logger.exception("Staggered run failed")
+        raise
+    finally:
+        if run_id is not None:
+            db.finish_run(
+                run_id, status,
+                trends_found=len(found), articles_written=articles_written,
+                posts_published=len(posts), posts_failed=len(errors),
+                error_summary=error_summary, log=_detach_run_log(log_handler, log_buffer),
+            )
 
 
 def run_health(args: argparse.Namespace) -> None:

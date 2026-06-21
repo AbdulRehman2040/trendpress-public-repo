@@ -1,8 +1,9 @@
 # trendpress runtime dependencies
 requests>=2.31          # WordPress REST + Pexels HTTP calls
 feedparser>=6.0         # Google Trends / RSS parsing (trends stage)
-pyyaml>=6.0             # config/settings.yaml + config/sites.yaml
+pyyaml>=6.0             # config/settings.yaml + the one-time sites importer
 python-dotenv>=1.0      # load secrets from .env
 google-genai>=1.0       # modern Gemini SDK  ->  `from google import genai`
 Pillow>=10.0            # image processing for the images stage
 tzdata>=2024.1          # IANA tz database for zoneinfo (needed on Windows hosts)
+psycopg[binary]>=3.1    # Neon Postgres state store (core/db.py)

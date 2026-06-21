@@ -131,9 +131,10 @@ def _attach_one(
                     package.site_id, chosen.source, chosen.photo_id, chosen.download_url)
         return None
 
-    media_id = _process_and_upload(chosen, package, site)
+    media_id, image_url = _process_and_upload(chosen, package, site)
     if media_id is not None:
         package.featured_media_id = media_id
+        package.featured_image_url = image_url
         _record_used(db, package, chosen)
     return media_id
 
@@ -277,27 +278,30 @@ def _link(url: str | None, text: str) -> str:
 # --------------------------------------------------------------------------- #
 def _process_and_upload(
     candidate: _Candidate, package: ArticlePackage, site: dict
-) -> int | None:
-    """Download + resize + upload; return the WP media id, or None on any failure."""
+) -> tuple[int | None, str | None]:
+    """Download + resize + upload; return (media_id, image_url), or (None, None) on failure."""
     try:
         raw = _download(candidate.download_url)
         jpeg = _to_jpeg(raw)
     except Exception as exc:  # network / decode / Pillow — degrade to no image
         logger.warning("images: [%s] processing failed for %s (%s)",
                        package.site_id, candidate.download_url, exc)
-        return None
+        return None, None
     try:
         media = WPClient(site).upload_media(
             jpeg, f"{package.slug}.jpg", "image/jpeg",
             alt_text=package.title, caption=candidate.caption_html,
         )
         media_id = int(media["id"])
+        # source_url is the public URL of the uploaded file on the WP site; the
+        # dashboard renders it. Fall back to the provider URL if WP omitted it.
+        image_url = media.get("source_url") or candidate.download_url
         logger.info("images: [%s] uploaded media %d (%s, %d bytes)",
                     package.site_id, media_id, candidate.source, len(jpeg))
-        return media_id
+        return media_id, image_url
     except Exception as exc:
         logger.warning("images: [%s] upload failed (%s)", package.site_id, exc)
-        return None
+        return None, None
 
 
 def _download(url: str) -> bytes:

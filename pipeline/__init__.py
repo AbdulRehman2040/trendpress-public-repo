@@ -66,7 +66,8 @@ class ArticlePackage:
     image_query: str
     faq: list[FaqItem] = field(default_factory=list)
     sources: list[str] = field(default_factory=list)
-    featured_media_id: int | None = None  # set by the images stage after upload
+    featured_media_id: int | None = None    # set by the images stage after upload
+    featured_image_url: str | None = None   # WP source_url of the uploaded image (for the dashboard)
 
 
 @dataclass

@@ -45,8 +45,13 @@ def publish(
     settings: dict,
     db,
     dry_run: bool = False,
+    run_id: int | None = None,
 ) -> list[PublishResult]:
-    """Publish/schedule every package; return one PublishResult per package, in order."""
+    """Publish/schedule every package; return one PublishResult per package, in order.
+
+    ``run_id`` (when set) is stored on each created post so the dashboard can
+    group a run's output and link posts back to the run that produced them.
+    """
     if not packages:
         return []
     site_by_id = {s["id"]: s for s in sites}
@@ -63,7 +68,7 @@ def publish(
         status = _decide_status(review_mode, sample_rate)
         media_id = (media_map or {}).get((package.site_id, package.trend_id)) or package.featured_media_id
         try:
-            results.append(_publish_one(package, site, status, media_id, scheduler, db, dry_run))
+            results.append(_publish_one(package, site, status, media_id, scheduler, db, dry_run, run_id))
         except Exception as exc:  # one broken site must never stop the network
             logger.warning("[%s] publish failed for %r (%s)", package.site_id, package.title, exc)
             results.append(PublishResult(package.site_id, None, None, "error", str(exc)[:300]))
@@ -87,7 +92,8 @@ def _decide_status(review_mode: str, sample_rate: float) -> str:
 # Single post
 # --------------------------------------------------------------------------- #
 def _publish_one(
-    package: ArticlePackage, site: dict, status: str, media_id, scheduler, db, dry_run: bool
+    package: ArticlePackage, site: dict, status: str, media_id, scheduler, db, dry_run: bool,
+    run_id: int | None = None,
 ) -> PublishResult:
     scheduled = scheduler.next_time(package.site_id) if status == "future" else None
 
@@ -119,8 +125,9 @@ def _publish_one(
     link = resp.get("link") or f"{site['url'].rstrip('/')}/?p={wp_post_id}"
 
     # Record success FIRST in posts, then mark the trend used (only now, so a
-    # failed run can retry the trend tomorrow).
-    db.add_post(package.site_id, package.trend_id, wp_post_id, package.title, link, status)
+    # failed run can retry the trend tomorrow). run_id + image_url feed the dashboard.
+    db.add_post(package.site_id, package.trend_id, wp_post_id, package.title, link, status,
+                run_id=run_id, image_url=package.featured_image_url)
     db.add_used_topic(package.trend_id, package.title)
     logger.info("[%s] created %s post %d: %s", package.site_id, status, wp_post_id, link)
     return PublishResult(package.site_id, wp_post_id, link, status, None)

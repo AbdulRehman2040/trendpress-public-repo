@@ -22,7 +22,21 @@ def load_settings() -> dict:
 
 
 def load_sites() -> list[dict]:
-    """Load site profiles from config/sites.yaml as a list of dicts.
+    """Load site profiles from the Neon ``sites`` table as a list of dicts.
+
+    Sites moved out of YAML so the dashboard can add/pause them and the change
+    applies on the next pipeline run. The returned dict shape is identical to the
+    old YAML format (incl. ``word_range`` and ``angle_pool`` as a list), so every
+    downstream consumer keeps working unchanged. Seed the table once with
+    ``python scripts/import_sites.py``. The db import is local to avoid a
+    circular import at package-init time.
+    """
+    from core import db
+    return db.load_sites_from_db()
+
+
+def load_sites_from_yaml() -> list[dict]:
+    """Load site profiles from config/sites.yaml (used only by the importer).
 
     Accepts either a top-level list (the documented format) or a mapping with a
     ``sites:`` key, and ignores any non-mapping entries (e.g. stray comments).
@@ -34,4 +48,7 @@ def load_sites() -> list[dict]:
     return [site for site in data if isinstance(site, dict)]
 
 
-__all__ = ["PROJECT_ROOT", "CONFIG_DIR", "DATA_DIR", "load_settings", "load_sites"]
+__all__ = [
+    "PROJECT_ROOT", "CONFIG_DIR", "DATA_DIR",
+    "load_settings", "load_sites", "load_sites_from_yaml",
+]

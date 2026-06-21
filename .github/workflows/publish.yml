@@ -7,7 +7,12 @@ name: trendpress publish
 on:
   schedule:
     - cron: "0 */3 * * *"     # 00:00, 03:00, 06:00 ... UTC
-  workflow_dispatch: {}        # lets you run it by hand from the Actions tab
+  workflow_dispatch:           # lets you run it by hand (Actions tab) or from the dashboard
+    inputs:
+      trigger:
+        description: "Run trigger label recorded in the dashboard (cron|manual)"
+        required: false
+        default: "manual"
 
 permissions:
   contents: read
@@ -30,19 +35,22 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # Persist the dedup database (used_topics / used_images / posts) across runs.
-      # Ephemeral runners lose disk between runs, so without this the same trends
-      # could be re-published. See the caveats in SETUP.md.
-      - name: Restore state (data/)
+      # State (used_topics / used_images / posts / runs / sites) now lives in Neon
+      # Postgres (durable, queryable by the dashboard), so the old data/ cache is
+      # no longer needed for dedup. We keep a light cache only for the rotating log
+      # file under data/; losing it has no effect on correctness.
+      - name: Restore logs (data/)
         uses: actions/cache@v4
         with:
           path: data
-          key: trendpress-state-${{ github.run_id }}
+          key: trendpress-logs-${{ github.run_id }}
           restore-keys: |
-            trendpress-state-
+            trendpress-logs-
 
       - name: Run staggered publish
         env:
+          DATABASE_URL:     ${{ secrets.DATABASE_URL }}
+          RUN_TRIGGER:      ${{ github.event.inputs.trigger || 'cron' }}
           GEMINI_API_KEY:   ${{ secrets.GEMINI_API_KEY }}
           GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
           GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
