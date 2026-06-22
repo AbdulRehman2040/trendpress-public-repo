@@ -66,6 +66,11 @@ jobs:
           WP_PASS_SITE8:  ${{ secrets.WP_PASS_SITE8 }}
           WP_PASS_SITE9:  ${{ secrets.WP_PASS_SITE9 }}
           WP_PASS_SITE10: ${{ secrets.WP_PASS_SITE10 }}
+          WP_PASS_SITE11: ${{ secrets.WP_PASS_SITE11 }}
+          WP_PASS_SITE12: ${{ secrets.WP_PASS_SITE12 }}
+          WP_PASS_SITE13: ${{ secrets.WP_PASS_SITE13 }}
+          WP_PASS_SITE14: ${{ secrets.WP_PASS_SITE14 }}
+          WP_PASS_SITE15: ${{ secrets.WP_PASS_SITE15 }}
           SMTP_HOST:     ${{ secrets.SMTP_HOST }}
           SMTP_PORT:     ${{ secrets.SMTP_PORT }}
           SMTP_USER:     ${{ secrets.SMTP_USER }}

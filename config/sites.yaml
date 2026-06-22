@@ -207,6 +207,106 @@
   posts_per_day_cap: 2
   status: active
 
+- id: site11
+  name: "Manchester Vault"
+  url: "https://manchestervault.co.uk"
+  wp_username: "News Desk"
+  app_password_env: "WP_PASS_SITE11"
+  niche: >
+    News for Manchester and Greater Manchester — local stories, culture and
+    football, alongside the day's big UK national news, sport and entertainment.
+  audience: "Manchester and Greater Manchester readers, plus a general UK audience"
+  tone: "clear, factual, neutral newsroom style"
+  angle_pool:
+    - "news report"
+    - "local Manchester angle"
+    - "what we know so far"
+    - "background and context"
+    - "reaction roundup"
+  word_range: [600, 900]
+  posts_per_day_cap: 2
+  status: active
+
+- id: site12
+  name: "Liverpool Mail"
+  url: "https://liverpoolmail.co.uk"
+  wp_username: "News Desk"
+  app_password_env: "WP_PASS_SITE12"
+  niche: >
+    News for Liverpool and Merseyside — local stories, culture and football,
+    alongside the big UK national news, sport and entertainment of the day.
+  audience: "Liverpool and Merseyside readers, plus a general UK audience"
+  tone: "clear, factual, neutral newsroom style"
+  angle_pool:
+    - "news report"
+    - "local Merseyside angle"
+    - "what we know so far"
+    - "background and context"
+    - "reaction roundup"
+  word_range: [600, 900]
+  posts_per_day_cap: 2
+  status: active
+
+- id: site13
+  name: "Sheffield Spot"
+  url: "https://sheffieldspot.co.uk"
+  wp_username: "News Desk"
+  app_password_env: "WP_PASS_SITE13"
+  niche: >
+    News for Sheffield and South Yorkshire — local and community stories, plus
+    the day's UK national news, sport and entertainment.
+  audience: "Sheffield and South Yorkshire readers, plus a general UK audience"
+  tone: "clear, factual, neutral newsroom style"
+  angle_pool:
+    - "news report"
+    - "local South Yorkshire angle"
+    - "what we know so far"
+    - "background and context"
+    - "reaction roundup"
+  word_range: [600, 900]
+  posts_per_day_cap: 2
+  status: active
+
+- id: site14
+  name: "Edinburgh Headlines"
+  url: "https://edinburghheadlines.co.uk"
+  wp_username: "News Desk"
+  app_password_env: "WP_PASS_SITE14"
+  niche: >
+    News for Edinburgh and Scotland — local and community stories, Scottish
+    politics and football, plus UK-wide national news and entertainment.
+  audience: "Edinburgh and Scotland readers, plus a general UK audience"
+  tone: "clear, factual, neutral newsroom style"
+  angle_pool:
+    - "news report"
+    - "local Scotland angle"
+    - "what we know so far"
+    - "background and context"
+    - "reaction roundup"
+  word_range: [600, 900]
+  posts_per_day_cap: 2
+  status: active
+
+- id: site15
+  name: "Cardiff Insight"
+  url: "https://cardiffinsight.co.uk"
+  wp_username: "News Desk"
+  app_password_env: "WP_PASS_SITE15"
+  niche: >
+    News for Cardiff and Wales — local and community stories, Welsh politics
+    and football, plus UK-wide national news, sport and entertainment.
+  audience: "Cardiff and Wales readers, plus a general UK audience"
+  tone: "clear, factual, neutral newsroom style"
+  angle_pool:
+    - "news report"
+    - "local Wales angle"
+    - "what we know so far"
+    - "background and context"
+    - "reaction roundup"
+  word_range: [600, 900]
+  posts_per_day_cap: 2
+  status: active
+
 # --- TEMPLATE -------------------------------------------------------------
 # - id: siteN
 #   name: "Human Readable Name"
