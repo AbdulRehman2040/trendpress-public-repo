@@ -30,7 +30,7 @@
 - id: site2
   name: "The London Hub"
   url: "https://thelondonhub.co.uk"
-  wp_username: "News Desk"
+  wp_username: "Laura Phil"        # app password belongs to the Laura Phil (editor) user, not News Desk
   app_password_env: "WP_PASS_SITE2"
   niche: >
     London-focused news and what's-on for the capital's readers, alongside the
@@ -45,7 +45,7 @@
     - "reaction roundup"
   word_range: [600, 900]
   posts_per_day_cap: 2
-  status: paused          # auth failed (401) — re-check WP_PASS_SITE2 / username, then set active
+  status: active
 
 - id: site3
   name: "Leeds Bulletin"
