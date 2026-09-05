@@ -12,7 +12,10 @@ digest = {
     "skipped_trends": [str],    # trends that matched no site / were not published
     "missing_images": [str],    # packages that got no featured image
     "paused_sites": [str],      # sites flagged paused by the kill-switch
+    "skipped_sites": [str],     # sites the cleanup run declined to touch, with why
 }
+
+Any key may be omitted; missing sections are simply not rendered.
 """
 from __future__ import annotations
 
@@ -62,7 +65,8 @@ def format_digest(digest: dict) -> str:
         lines.append("- (none)")
 
     for label, key in (("Errors", "errors"), ("Skipped trends", "skipped_trends"),
-                       ("Missing images", "missing_images"), ("Paused sites", "paused_sites")):
+                       ("Missing images", "missing_images"), ("Paused sites", "paused_sites"),
+                       ("Skipped sites", "skipped_sites")):
         items = digest.get(key) or []
         if items:
             lines.append(f"\n{label} ({len(items)}):")

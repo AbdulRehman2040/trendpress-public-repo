@@ -31,3 +31,20 @@ publish_window:
 
 # Per-site output ceiling fallback (used when a site omits posts_per_day_cap)
 posts_per_day_cap_default: 2
+
+# --------------------------------------------------------------------------- #
+# Housekeeping — auto-delete dead posts (python main.py --prune)
+# --------------------------------------------------------------------------- #
+# A post is "dead" when it has been live for min_age_days and earned no more
+# than max_clicks / max_impressions in Search Console over metrics_window_days.
+# Deletion is permanent on WordPress (force=true), so the row and the featured
+# image leave wp_posts and wp-content/uploads rather than sitting in the trash.
+prune:
+  enabled: true
+  min_age_days: 60                    # only touch posts at least this old
+  max_clicks: 0                       # 0 clicks = nobody read it
+  max_impressions: 2                  # <=2 impressions = not ranking at all
+  metrics_window_days: 28             # Search Console trailing window
+  max_deletes_per_site_per_week: 10   # SAFETY CAP — bounds a wrong threshold
+  require_fresh_metrics_days: 7       # refuse to prune on metrics older than this
+  delete_media: true                  # also delete the featured image (reclaims disk)

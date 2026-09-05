@@ -127,7 +127,8 @@ def _publish_one(
     # Record success FIRST in posts, then mark the trend used (only now, so a
     # failed run can retry the trend tomorrow). run_id + image_url feed the dashboard.
     db.add_post(package.site_id, package.trend_id, wp_post_id, package.title, link, status,
-                run_id=run_id, image_url=package.featured_image_url)
+                run_id=run_id, image_url=package.featured_image_url,
+                featured_media_id=int(media_id) if media_id else None)
     db.add_used_topic(package.trend_id, package.title)
     logger.info("[%s] created %s post %d: %s", package.site_id, status, wp_post_id, link)
     return PublishResult(package.site_id, wp_post_id, link, status, None)

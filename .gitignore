@@ -13,6 +13,9 @@ env/
 
 # Secrets
 .env
+# Google service-account key for Search Console (never commit this)
+gsc-key.json
+*-service-account.json
 
 # Runtime data: state DB, logs, generated previews (keep the dir, drop contents)
 data/*

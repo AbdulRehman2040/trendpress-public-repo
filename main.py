@@ -12,6 +12,8 @@ Examples:
     python main.py --sites site1,site2
     python main.py --canary-only
     python main.py --health
+    python main.py --sync-metrics
+    python main.py --prune --dry-run
 """
 from __future__ import annotations
 
@@ -28,7 +30,7 @@ from dotenv import load_dotenv
 
 from core import DATA_DIR, load_settings, load_sites
 from core import db, notify
-from pipeline import images, matcher, publisher, trends, writer
+from pipeline import images, matcher, pruner, publisher, trends, writer
 
 LOG_PATH = DATA_DIR / "trendpress.log"
 logger = logging.getLogger("trendpress")
@@ -83,6 +85,23 @@ def select_sites(args: argparse.Namespace, skip_paused: bool = True) -> list[dic
             "No sites selected. If the Neon 'sites' table is empty, run "
             "`python scripts/import_sites.py` once to seed it from config/sites.yaml."
         )
+    return sites
+
+
+def select_all_sites(args: argparse.Namespace) -> list[dict]:
+    """Every configured site, honouring only --sites.
+
+    Housekeeping (--sync-metrics, --prune) deliberately does NOT use
+    select_sites(): that drops status=paused sites, and a paused site is
+    precisely the one accumulating dead posts nobody is watching. Skipping it
+    would leave the worst offenders untouched for as long as it stays paused.
+    """
+    sites = load_sites()
+    if args.sites:
+        wanted = {s.strip() for s in args.sites.split(",") if s.strip()}
+        sites = [s for s in sites if s.get("id") in wanted]
+    if not sites:
+        logger.warning("No sites selected.")
     return sites
 
 
@@ -372,6 +391,52 @@ def _check_site_health(site: dict) -> tuple[str, bool]:
     return f"ok: {len(live)} live post(s), {successes} ok / {errors} errors (7d)", False
 
 
+def run_sync_metrics(args: argparse.Namespace) -> None:
+    """Refresh Search Console metrics for every site, then exit.
+
+    Kept separate from --prune so the numbers can be inspected (in the dashboard
+    or straight from post_metrics) before anything is deleted, and so a metrics
+    failure never coincides with a deletion window.
+    """
+    settings = load_settings()
+    db.init_db()
+    sites = select_all_sites(args)
+    logger.info("Metrics sync start | sites=%d", len(sites))
+    summary = pruner.sync_metrics(sites, settings)
+    if summary["errors"]:
+        logger.warning("Metrics sync finished with %d site error(s)", len(summary["errors"]))
+
+
+def run_prune(args: argparse.Namespace) -> None:
+    """Delete dead posts from WordPress, then email the digest.
+
+    Honours --dry-run, which lists exactly what would go without touching
+    WordPress or the database — always worth running first after changing a
+    threshold in config/settings.yaml.
+    """
+    settings = load_settings()
+    db.init_db()
+    sites = select_all_sites(args)
+    logger.info("Prune start | dry_run=%s | sites=%d", args.dry_run, len(sites))
+
+    result = pruner.prune(sites, settings, dry_run=args.dry_run)
+    report = pruner.render_report(result, dry_run=args.dry_run)
+    logger.info("Prune report:\n%s", report)
+
+    deleted = result.get("deleted") or []
+    prefix = "[DRY-RUN] " if args.dry_run else ""
+    notify.send_digest({
+        "title": f"{prefix}trendpress cleanup — {len(deleted)} post(s) removed",
+        "posts": [{"site": d["site_id"], "title": d.get("title"),
+                   "status": d["outcome"], "url": d.get("url")} for d in deleted],
+        "errors": result.get("errors") or [],
+        "skipped_trends": [],
+        "missing_images": [],
+        "paused_sites": [],
+        "skipped_sites": result.get("skipped_sites") or [],
+    }, settings)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Define the command-line interface."""
     p = argparse.ArgumentParser(
@@ -388,6 +453,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="run the weekly kill-switch health check and exit")
     p.add_argument("--stagger", action="store_true",
                    help="publish to each site one at a time with a gap between them")
+    p.add_argument("--sync-metrics", action="store_true",
+                   help="pull Search Console clicks/impressions into post_metrics and exit")
+    p.add_argument("--prune", action="store_true",
+                   help="delete old posts that earned no traffic (honours --dry-run) and exit")
     p.add_argument("--gap-minutes", type=int,
                    default=int(os.environ.get("STAGGER_GAP_MIN", "3") or 3), metavar="N",
                    help="minutes to wait between sites in --stagger mode (env STAGGER_GAP_MIN, default 3)")
@@ -403,6 +472,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.health:
             run_health(args)
+        elif args.sync_metrics:
+            run_sync_metrics(args)
+        elif args.prune:
+            run_prune(args)
         elif args.stagger:
             run_staggered(args)
         else:

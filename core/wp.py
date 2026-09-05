@@ -79,7 +79,56 @@ class WPClient:
         return [{"id": p.get("id"), "link": p.get("link"), "date": p.get("date")}
                 for p in resp.json()]
 
+    def get_post(self, post_id: int, fields: str = "id,link,featured_media,date") -> dict:
+        """Fetch a single post (any status) — used to resolve featured_media before deleting."""
+        return self._request("GET", f"posts/{int(post_id)}", params={"_fields": fields}).json()
+
+    def delete_post(self, post_id: int, force: bool = True) -> dict:
+        """Delete a post.
+
+        ``force=True`` bypasses the trash and removes the row permanently. That
+        is the point of the pruner: a trashed post still occupies a wp_posts row
+        (and its revisions/meta), so trashing reclaims neither database size nor
+        the crawl budget the deletion is meant to free.
+
+        A 404 is treated as success — the post is already gone, which is the
+        state we wanted.
+        """
+        url = f"{self.base}/posts/{int(post_id)}"
+        resp = requests.delete(
+            url, auth=self._auth, timeout=TIMEOUT,
+            params={"force": "true" if force else "false"},
+        )
+        if resp.status_code == 404:
+            logger.info("[%s] post %d already absent (404) — treating as deleted",
+                        self.site_id, post_id)
+            return {"deleted": True, "already_gone": True}
+        if not resp.ok:
+            raise WPError(
+                f"[{self.site_id}] DELETE {url} -> {resp.status_code}: {resp.text[:500]}"
+            )
+        return resp.json()
+
     # ---- media -------------------------------------------------------------
+    def delete_media(self, media_id: int) -> dict:
+        """Permanently delete an attachment and its files on disk.
+
+        The WP REST API REQUIRES force=true for media (attachments cannot be
+        trashed), so this is always permanent. This is what actually reclaims
+        space in wp-content/uploads — the article text is negligible next to the
+        featured images and their generated thumbnail sizes.
+        """
+        url = f"{self.base}/media/{int(media_id)}"
+        resp = requests.delete(url, auth=self._auth, timeout=TIMEOUT,
+                               params={"force": "true"})
+        if resp.status_code == 404:
+            return {"deleted": True, "already_gone": True}
+        if not resp.ok:
+            raise WPError(
+                f"[{self.site_id}] DELETE {url} -> {resp.status_code}: {resp.text[:500]}"
+            )
+        return resp.json()
+
     def upload_media(
         self,
         binary: bytes,

@@ -1,0 +1,79 @@
+name: trendpress cleanup
+
+# Weekly housekeeping, in two ordered steps:
+#   1. --sync-metrics  pulls Search Console clicks/impressions for every live
+#      post into the post_metrics table.
+#   2. --prune         permanently deletes (force=true) posts that are at least
+#      prune.min_age_days old and earned no traffic, plus their featured images.
+#
+# The pruner refuses to run on stale metrics, so step 1 must succeed for step 2
+# to delete anything — that ordering is the point of running them in one job.
+# Deletions are capped at prune.max_deletes_per_site_per_week in settings.yaml.
+on:
+  schedule:
+    - cron: "30 4 * * 1"       # Mondays 04:30 UTC, well clear of the 3-hourly publisher
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "List what would be deleted without touching WordPress"
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trendpress-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Sync Search Console metrics
+        env:
+          DATABASE_URL:         ${{ secrets.DATABASE_URL }}
+          GSC_CREDENTIALS_JSON: ${{ secrets.GSC_CREDENTIALS_JSON }}
+        run: python main.py --sync-metrics
+
+      - name: Prune dead posts
+        env:
+          DATABASE_URL:   ${{ secrets.DATABASE_URL }}
+          WP_PASS_SITE1:  ${{ secrets.WP_PASS_SITE1 }}
+          WP_PASS_SITE2:  ${{ secrets.WP_PASS_SITE2 }}
+          WP_PASS_SITE3:  ${{ secrets.WP_PASS_SITE3 }}
+          WP_PASS_SITE4:  ${{ secrets.WP_PASS_SITE4 }}
+          WP_PASS_SITE5:  ${{ secrets.WP_PASS_SITE5 }}
+          WP_PASS_SITE6:  ${{ secrets.WP_PASS_SITE6 }}
+          WP_PASS_SITE7:  ${{ secrets.WP_PASS_SITE7 }}
+          WP_PASS_SITE8:  ${{ secrets.WP_PASS_SITE8 }}
+          WP_PASS_SITE9:  ${{ secrets.WP_PASS_SITE9 }}
+          WP_PASS_SITE10: ${{ secrets.WP_PASS_SITE10 }}
+          WP_PASS_SITE11: ${{ secrets.WP_PASS_SITE11 }}
+          WP_PASS_SITE12: ${{ secrets.WP_PASS_SITE12 }}
+          WP_PASS_SITE13: ${{ secrets.WP_PASS_SITE13 }}
+          WP_PASS_SITE14: ${{ secrets.WP_PASS_SITE14 }}
+          WP_PASS_SITE15: ${{ secrets.WP_PASS_SITE15 }}
+          SMTP_HOST:     ${{ secrets.SMTP_HOST }}
+          SMTP_PORT:     ${{ secrets.SMTP_PORT }}
+          SMTP_USER:     ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          ADMIN_MAIL:    ${{ secrets.ADMIN_MAIL }}
+        # Manual runs default to a dry run; the weekly cron deletes for real.
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            python main.py --prune --dry-run
+          else
+            python main.py --prune
+          fi

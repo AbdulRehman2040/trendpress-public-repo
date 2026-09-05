@@ -7,3 +7,4 @@ google-genai>=1.0       # modern Gemini SDK  ->  `from google import genai`
 Pillow>=10.0            # image processing for the images stage
 tzdata>=2024.1          # IANA tz database for zoneinfo (needed on Windows hosts)
 psycopg[binary]>=3.1    # Neon Postgres state store (core/db.py)
+google-auth>=2.30       # Search Console service-account auth (core/gsc.py)
