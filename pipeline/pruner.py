@@ -163,6 +163,17 @@ def prune(sites: list[dict], settings: dict, dry_run: bool = False) -> dict:
             if outcome["outcome"] == "error":
                 result["errors"].append(
                     f"[{site_id}] {row.get('title')}: {outcome['detail']}")
+                # A 401/403 on delete is the credentials lacking delete_posts,
+                # not a problem with this particular post — every remaining
+                # candidate would fail identically. Stop the site rather than
+                # burn the whole weekly allowance proving the same thing.
+                if _is_permission_error(outcome.get("detail")):
+                    msg = ("WordPress user cannot delete posts (401/403) — give "
+                           "the application-password user a role with the "
+                           "delete_posts capability")
+                    logger.warning("[%s] aborting prune: %s", site_id, msg)
+                    result["skipped_sites"].append(f"{site_id}: {msg}")
+                    break
             else:
                 result["deleted"].append(outcome)
 
@@ -186,6 +197,21 @@ def _site_blocked(site_id: str, cfg: dict) -> str | None:
         return (f"metrics are {age_days}d stale (limit {limit}d) — "
                 f"refusing to prune on old data")
     return None
+
+
+def _is_permission_error(detail: str | None) -> bool:
+    """True when a delete failed because the credentials lack the capability.
+
+    Distinguished from a transient failure because it is worth abandoning the
+    whole site for: no amount of retrying grants a permission.
+    """
+    if not detail:
+        return False
+    text = str(detail).lower()
+    return ("rest_cannot_delete" in text
+            or "not allowed to delete" in text
+            or "-> 401:" in text
+            or "-> 403:" in text)
 
 
 def _allowance(site_id: str, cfg: dict) -> int:
