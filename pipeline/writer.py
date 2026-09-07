@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 from core import DATA_DIR, extract
 from core.wp import WPClient
 from . import ArticlePackage, Assignment, FaqItem, Trend
+from . import seo
 
 if TYPE_CHECKING:  # avoid importing the google-genai SDK at module load time
     from core.gemini import GeminiClient
@@ -471,6 +472,10 @@ def _validate(raw: Any, trend: Trend, target_words: int) -> list[str]:
 
     errors.extend(_filler_errors(html))
     errors.extend(_title_errors(raw, trend))
+    # focus_keyword used to be collected and then ignored; enforce that it lands
+    # in the title, the opening and a subheading — without tipping into stuffing.
+    errors.extend(seo.keyword_errors(
+        str(raw.get("title", "")), html, str(raw.get("focus_keyword", ""))))
     return errors
 
 

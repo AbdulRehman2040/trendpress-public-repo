@@ -28,6 +28,7 @@ from datetime import datetime, time, timedelta, timezone
 
 from core.wp import WPClient
 from . import ArticlePackage, PublishResult
+from . import seo
 
 logger = logging.getLogger(__name__)
 
@@ -105,10 +106,14 @@ def _publish_one(
 
     wp = WPClient(site)
     categories, tags = _resolve_terms(wp, package)
+    # NewsArticle structured data is appended here rather than in the writer
+    # because the featured image URL and the final page URL only exist now.
+    content = package.html_content + "\n" + seo.news_article_jsonld(
+        package, site, published_at=scheduled)
     payload = {
         "title": package.title,
         "slug": package.slug,
-        "content": package.html_content,
+        "content": content,
         "excerpt": package.meta_description,
         "status": status,
         "categories": categories,
