@@ -277,6 +277,34 @@ def _build_prompt(
         "the fact yourself.\n"
         f"{_format_internal_links(internal_links)}\n\n"
         f"{_format_categories(existing_categories)}"
+        "TITLE AND META DESCRIPTION — these decide whether anyone clicks\n"
+        "A page can rank #1 and still earn zero clicks if the title hands the "
+        "searcher their answer. Real example from this network: 'Melanie Walters "
+        "Completes Strictly Come Dancing 2026 Line-Up' held position 1.0 with 56 "
+        "impressions and NOT ONE click — someone searching for the line-up read the "
+        "answer in the title and never needed the page.\n"
+        "Write the title to these rules:\n"
+        "- 45-60 characters. Longer is truncated in search results.\n"
+        "- START with the words a person would actually type into Google — the "
+        "entity and the event, not a subordinate clause.\n"
+        "- Name the specific thing: the person, club, product, place or figure.\n"
+        "- PROMISE the detail; do not DELIVER it. State what happened, then leave "
+        "the specifics — the numbers, the reason, the reaction, the full list — for "
+        "the article to answer. 'X Explains Stance On Y' earns the click; "
+        "'X Completes The Line-Up' ends the search.\n"
+        "- This is NOT clickbait and never becomes it: everything the title implies "
+        "MUST be answered in the body. Promising what you cannot deliver loses the "
+        "reader and the ranking.\n"
+        "- Do NOT copy the source headline or the TOPIC line word-for-word. Rewrite "
+        "it around this site's angle and audience, so the page is not one of a "
+        "dozen identical headlines competing for the same query.\n"
+        "- No ALL CAPS, no exclamation marks, no 'You Won't Believe'.\n"
+        "Write the meta_description to these rules:\n"
+        "- 120-155 characters, and treat it as the second half of the pitch.\n"
+        "- Include the main search phrase naturally, in a real sentence.\n"
+        "- Add the one concrete detail that makes THIS result worth choosing over "
+        "the others on the page — a figure, a name, a date, a consequence.\n"
+        "- Never restate the title in different words.\n\n"
         "HTML RULES: html_content must use ONLY these tags: h2, h3, p, ul, li, a, "
         "strong. No <h1>. No markdown. No inline styles. No <html> or <body> "
         "wrapper.\n\n"
@@ -284,8 +312,11 @@ def _build_prompt(
         "MATERIAL cannot support a genuinely useful article, return exactly "
         '{"insufficient_material": true} and nothing else. Otherwise return these '
         "keys:\n"
-        '{"title": "MUST be under 60 characters, no clickbait", "slug": "kebab-case", '
-        '"meta_description": "<=155 chars", "focus_keyword": "main keyword phrase", '
+        '{"title": "45-60 chars, search phrase first, promises the detail without '
+        'giving it away, NOT a copy of the source headline", "slug": "kebab-case", '
+        '"meta_description": "120-155 chars, second half of the pitch, one '
+        'concrete detail, never a restatement of the title", '
+        '"focus_keyword": "the phrase a reader would type into Google", '
         '"tags": ["3 to 6 tags"], "category": "an existing category if one fits, '
         'else a new short one", '
         '"html_content": "the article HTML", '
@@ -439,7 +470,43 @@ def _validate(raw: Any, trend: Trend, target_words: int) -> list[str]:
         errors.append(f"faq must have at most 4 items, found {len(faq)}")
 
     errors.extend(_filler_errors(html))
+    errors.extend(_title_errors(raw, trend))
     return errors
+
+
+def _title_errors(raw: dict, trend: Trend) -> list[str]:
+    """Police the two fields that decide whether a ranked page is ever clicked."""
+    errors: list[str] = []
+    title = " ".join(str(raw.get("title", "")).split())
+    meta = " ".join(str(raw.get("meta_description", "")).split())
+
+    # Too short wastes the SERP line; over-length is trimmed in _build_package, so
+    # only flag a title so long that trimming would mangle its meaning.
+    if len(title) < 30:
+        errors.append(f"title is {len(title)} chars — too short to carry the search "
+                      f"phrase and a hook (aim 45-60)")
+    elif len(title) > 75:
+        errors.append(f"title is {len(title)} chars and will be cut off in search "
+                      f"results (aim 45-60)")
+
+    # A verbatim copy of the trend headline is why the same story on several of
+    # our sites ends up with byte-identical titles competing for one query.
+    if title and _norm(title) == _norm(trend.title):
+        errors.append("title copies the source headline verbatim — rewrite it "
+                      "around this site's angle")
+
+    if meta and len(meta) < 90:
+        errors.append(f"meta_description is {len(meta)} chars — too short to add a "
+                      f"reason to click (aim 120-155)")
+    if title and meta and _norm(meta).startswith(_norm(title)[:40]):
+        errors.append("meta_description restates the title — give it a different, "
+                      "concrete detail")
+    return errors
+
+
+def _norm(text: str) -> str:
+    """Lowercase, punctuation-stripped form for comparing two headlines."""
+    return re.sub(r"[^a-z0-9 ]", "", str(text).lower()).strip()
 
 
 # Openers that announce the article instead of reporting it, and the "go read it
