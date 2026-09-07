@@ -19,6 +19,7 @@ class NewsItem:
     snippet: str
     url: str
     source: str
+    body: str = ""   # full article text when fetchable (core/extract.py); "" otherwise
 
 
 @dataclass

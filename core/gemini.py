@@ -34,7 +34,8 @@ from core import load_settings
 
 logger = logging.getLogger(__name__)
 
-NON_RETRYABLE_CODES = (400, 401, 403)  # bad request / auth — never transient
+NON_RETRYABLE_CODES = (400,)      # malformed request — retrying cannot help
+DEAD_KEY_CODES = (401, 403)       # this KEY is bad (revoked / project denied), not the request
 DEFAULT_FALLBACK_MODEL = "gemini-2.5-flash-lite"
 
 
@@ -52,6 +53,10 @@ class GeminiClient:
             raise GeminiError("no Gemini API key set (GEMINI_API_KEY / GEMINI_API_KEY_2 ...)")
         self._clients = [genai.Client(api_key=k) for k in keys]
         self._idx = 0
+        # Keys that returned 401/403. A revoked key or a denied project stays bad
+        # for the whole run, so we retire it after the first failure instead of
+        # round-robining back onto it and losing one article in every N.
+        self._dead: set[int] = set()
 
         self._model = (model or os.environ.get("GEMINI_MODEL")
                        or settings.get("gemini_model") or "gemini-2.5-flash")
@@ -87,6 +92,15 @@ class GeminiClient:
         )
         return self._parse_json(self._call_with_retry(prompt, config))
 
+    def _next_live_key(self, start: int) -> int:
+        """First non-retired key at or after ``start`` (wraps; all-dead is caller's problem)."""
+        n = len(self._clients)
+        for offset in range(n):
+            candidate = start + offset
+            if candidate % n not in self._dead:
+                return candidate
+        return start  # every key retired — the caller raises on the next failure
+
     def _call_with_retry(self, prompt: str, config: types.GenerateContentConfig) -> str:
         """Invoke the model with error-aware retries, key rotation and fallback."""
         model = self._model
@@ -97,6 +111,7 @@ class GeminiClient:
         self._idx += 1
 
         for attempt in range(1, self._max_retries + 2):  # 1 .. max_retries (+1 final)
+            key_idx = self._next_live_key(key_idx)        # never dial a retired key
             time.sleep(self._min_between)                 # min gap between calls
             client = self._clients[key_idx % len(self._clients)]
             try:
@@ -106,6 +121,25 @@ class GeminiClient:
                 return resp.text or ""
             except genai_errors.APIError as exc:
                 code = getattr(exc, "code", None)
+
+                if code in DEAD_KEY_CODES:
+                    # The key is bad, not the prompt. Retire it and try another —
+                    # failing the whole article here would waste every remaining
+                    # working key for the sake of one revoked one.
+                    slot = key_idx % len(self._clients)
+                    self._dead.add(slot)
+                    live = len(self._clients) - len(self._dead)
+                    logger.warning(
+                        "Gemini key #%d rejected (%s: %s); retiring it for this run, "
+                        "%d key(s) still live",
+                        slot + 1, code, str(exc)[:120], live,
+                    )
+                    if live <= 0:
+                        logger.error("Gemini: every API key has been rejected")
+                        raise
+                    key_idx += 1
+                    continue  # straight to the next key, no backoff — nothing to wait for
+
                 if code in NON_RETRYABLE_CODES or attempt > self._max_retries:
                     raise
 

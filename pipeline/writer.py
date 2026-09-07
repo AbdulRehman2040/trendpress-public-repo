@@ -23,7 +23,7 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from core import DATA_DIR
+from core import DATA_DIR, extract
 from core.wp import WPClient
 from . import ArticlePackage, Assignment, FaqItem, Trend
 
@@ -35,14 +35,25 @@ logger = logging.getLogger(__name__)
 PREVIEW_DIR = DATA_DIR / "preview"
 REQUIRED_KEYS = (
     "title", "slug", "meta_description", "focus_keyword",
-    "tags", "category", "html_content", "image_query", "faq",
-)
-WORD_TOLERANCE = 0.25  # +/- 25% of the target word count
+    "tags", "category", "html_content", "image_query",
+)  # "faq" is deliberately optional — omitting it beats generic filler questions
+# Substance gates. The old design set a word TARGET and validated a +/-25% band
+# around it, which forced the model to pad thin material up to a quota — the
+# direct cause of the "thin content" problem. Length is now an OUTPUT of how much
+# source material exists, and these are floors rather than targets.
+MIN_SOURCE_WORDS = 120   # below this we refuse to write at all, rather than pad
+MIN_ARTICLE_WORDS = 300  # a real piece; no upper bound, the material decides
 
 _SYSTEM = (
-    "You are an experienced UK news writer producing original, factually-grounded "
-    "articles for a specific niche website. You write careful UK English and you "
-    "never invent facts beyond the source material you are given."
+    "You are an experienced UK news writer. You write careful UK English and you "
+    "never invent facts beyond the source material you are given.\n\n"
+    "Your work is judged on one question: after reading your article, does the "
+    "reader know the thing they came for, without needing to click through to "
+    "another site? An article that describes what other outlets reported, without "
+    "carrying the substance itself, has failed — regardless of its length.\n\n"
+    "You would rather file 350 words that answer the question than 900 words that "
+    "circle it. You never pad, never restate your own points, and never write a "
+    "section that exists only to fill space."
 )
 
 
@@ -65,7 +76,9 @@ def write_articles(
 
     site_by_id = {s["id"]: s for s in sites}
     category_cache: dict[str, list[str]] = {}  # site_id -> existing category names
+    body_cache: dict[str, str] = {}            # source url -> fetched article text
     packages: list[ArticlePackage] = []
+    skipped_thin = 0
     for assignment in assignments:
         site = site_by_id.get(assignment.site_id)
         if site is None:
@@ -75,11 +88,42 @@ def write_articles(
             logger.info("[%s] already has a post for %s; skipping",
                         assignment.site_id, assignment.trend.trend_id)
             continue
+
+        # Pull the real article text behind each source link before writing.
+        _hydrate_sources(assignment.trend, body_cache)
+        available = source_words(assignment.trend)
+        if available < MIN_SOURCE_WORDS:
+            logger.info("[%s] skipping %r: only %d words of source material "
+                        "(need %d) — refusing to pad",
+                        assignment.site_id, assignment.trend.title,
+                        available, MIN_SOURCE_WORDS)
+            skipped_thin += 1
+            continue
+
         package = _write_one(assignment, site, gemini, category_cache)
         if package is not None:
             packages.append(package)
-    logger.info("writer: produced %d/%d article(s)", len(packages), len(assignments))
+    logger.info("writer: produced %d/%d article(s) (%d skipped for thin sources)",
+                len(packages), len(assignments), skipped_thin)
     return packages
+
+
+def _hydrate_sources(trend: Trend, cache: dict[str, str]) -> None:
+    """Fetch each source article's body text in place, caching per URL per run.
+
+    The same trend is often assigned to several sites, so without the cache we
+    would re-fetch the same pages repeatedly. A failed fetch leaves body="" and
+    the prompt falls back to the RSS snippet for that item.
+    """
+    for item in trend.news_items:
+        if item.body or not item.url:
+            continue
+        if item.url not in cache:
+            cache[item.url] = extract.extract_article(item.url)
+        item.body = cache[item.url]
+    fetched = sum(1 for i in trend.news_items if i.body)
+    logger.debug("writer: hydrated %d/%d source(s) for %r (%d words)",
+                 fetched, len(trend.news_items), trend.title, source_words(trend))
 
 
 def _already_posted(db, site_id: str, trend_id: str) -> bool:
@@ -115,6 +159,11 @@ def _write_one(
         except Exception as exc:  # call failed (network/quota/parse) — skip cleanly
             logger.warning("[%s] generation call failed for %r (%s)",
                            site_id, trend.title, exc)
+            return None
+        # The writer is allowed to decline thin material rather than pad it.
+        if isinstance(raw, dict) and raw.get("insufficient_material"):
+            logger.info("[%s] writer declined %r: insufficient source material",
+                        site_id, trend.title)
             return None
         raw = _repair(raw, trend)  # cheap local fixes (title length, source links) — avoid a regen
         errors = _validate(raw, trend, target_words)
@@ -181,10 +230,19 @@ def _build_prompt(
         f"- Audience: {audience}\n"
         f"- Tone: {tone}\n"
         f"- Editorial angle for THIS article: {assignment.angle}\n"
-        f"- Target length: about {target_words} words (must stay within +/-25%).\n\n"
+        "- Length: however long the SOURCE MATERIAL genuinely supports, and no "
+        f"longer. Aim for at least {MIN_ARTICLE_WORDS} words, but NEVER pad to "
+        "reach a number. If the material only supports 400 words, write 400.\n\n"
         f"TOPIC: {trend.title}\n\n"
         "SOURCE MATERIAL — the only permitted source of facts:\n"
         f"{_format_sources(trend)}\n\n"
+        "THE ONE RULE THAT MATTERS\n"
+        "Carry the substance. If the topic is a set of hints, GIVE the hints. If "
+        "it is a result, STATE the result. If it is a price, a time, a line-up or "
+        "a decision, put it in the article. A reader who finishes your piece must "
+        "not still need to visit another site to learn the thing the headline "
+        "promised. Never write 'according to X, details are available' — take the "
+        "detail from the SOURCE MATERIAL and report it yourself.\n\n"
         "HARD RULES (follow exactly):\n"
         "- Write in UK English.\n"
         "- Use ONLY facts, quotes, numbers and names that appear in the SOURCE "
@@ -194,23 +252,37 @@ def _build_prompt(
         "<source>\").\n"
         "- Use a neutral news register suited to the angle. No clickbait.\n"
         "- The angle is the lens for framing and the takeaway only — never a "
-        "licence to invent facts.\n\n"
-        "REQUIRED ARTICLE STRUCTURE (inside html_content):\n"
-        "1. Opening paragraph(s) covering the development.\n"
-        "2. An <h2>Background</h2> context section.\n"
-        "3. One or two <h2> sections on the main developments.\n"
-        "4. An <h2> FAQ section with 3-4 genuinely useful Q&As (the same Q&As "
-        "must also appear in the \"faq\" JSON field).\n"
-        f"5. A closing <h2>What this means for you</h2> takeaway written "
-        f"specifically for: {audience}.\n"
-        "6. REQUIRED: include at least TWO <a href=\"...\"> links pointing to the "
-        "SOURCE MATERIAL urls, woven naturally into the body.\n"
+        "licence to invent facts.\n"
+        "- Do NOT write filler sentences that announce what the article will do "
+        "('In this article we explore...'), restate the headline, or summarise "
+        "what you have just said.\n"
+        "- If the SOURCE MATERIAL is too thin to support a genuinely useful "
+        "article, return {\"insufficient_material\": true} and nothing else. "
+        "Filing nothing is strictly better than filing padding.\n\n"
+        "ARTICLE STRUCTURE (inside html_content)\n"
+        "Lead with the substance — the most important concrete fact goes in the "
+        "first two sentences, not after a scene-setting preamble. Then use as many "
+        "<h2> sections as the material warrants (at least two), each covering "
+        "something genuinely distinct.\n"
+        "Include these ONLY where they add real value:\n"
+        "- a background/context section, if context is needed to understand it;\n"
+        f"- a short closing section on what it means for {audience}, if there is a "
+        "concrete implication (skip it if you would only be restating the story);\n"
+        "- an <h2> FAQ of 2-4 questions a reader would ACTUALLY ask, each answered "
+        "with a specific fact from the source material. Omit the FAQ entirely "
+        "rather than writing generic questions. Any FAQ you include must also "
+        "appear in the \"faq\" JSON field.\n"
+        "REQUIRED: at least TWO <a href=\"...\"> links to the SOURCE MATERIAL urls, "
+        "woven into the body as attribution — never as a substitute for reporting "
+        "the fact yourself.\n"
         f"{_format_internal_links(internal_links)}\n\n"
         f"{_format_categories(existing_categories)}"
         "HTML RULES: html_content must use ONLY these tags: h2, h3, p, ul, li, a, "
         "strong. No <h1>. No markdown. No inline styles. No <html> or <body> "
         "wrapper.\n\n"
-        "OUTPUT — return STRICT JSON only (no markdown fences), with EXACTLY these "
+        "OUTPUT — return STRICT JSON only (no markdown fences). If the SOURCE "
+        "MATERIAL cannot support a genuinely useful article, return exactly "
+        '{"insufficient_material": true} and nothing else. Otherwise return these '
         "keys:\n"
         '{"title": "MUST be under 60 characters, no clickbait", "slug": "kebab-case", '
         '"meta_description": "<=155 chars", "focus_keyword": "main keyword phrase", '
@@ -218,20 +290,41 @@ def _build_prompt(
         'else a new short one", '
         '"html_content": "the article HTML", '
         '"image_query": "2-3 generic English words for a stock photo, NEVER a '
-        'person\'s name or brand", "faq": [{"q": "...", "a": "..."}]}'
+        'person\'s name or brand", '
+        '"faq": [{"q": "...", "a": "..."}]  (OMIT this key entirely unless the '
+        'questions are ones a reader would really ask, each answered with a '
+        'specific fact from the source material)}'
     )
 
 
 def _format_sources(trend: Trend) -> str:
+    """Render the source block, preferring fetched article text over the snippet.
+
+    ``body`` is the full text of the source article when core/extract.py could
+    reach it — typically 500-900 words against the RSS snippet's 30. This is what
+    makes "use only these facts" a workable instruction instead of a padding
+    mandate: there are now enough facts to write from.
+    """
     blocks = []
     for i, item in enumerate(trend.news_items, start=1):
-        blocks.append(
-            f"[{i}] TITLE: {item.title}\n"
-            f"    SNIPPET: {item.snippet or '(no snippet provided)'}\n"
-            f"    SOURCE: {item.source or 'unknown'}\n"
-            f"    URL: {item.url}"
-        )
-    return "\n".join(blocks)
+        block = [
+            f"[{i}] TITLE: {item.title}",
+            f"    SOURCE: {item.source or extract.domain_of(item.url) or 'unknown'}",
+            f"    URL: {item.url}",
+        ]
+        if item.body:
+            block.append(f"    FULL TEXT: {item.body}")
+        else:
+            block.append(f"    SNIPPET (full text unavailable): "
+                         f"{item.snippet or '(none provided)'}")
+        blocks.append("\n".join(block))
+    return "\n\n".join(blocks)
+
+
+def source_words(trend: Trend) -> int:
+    """Total words of usable source material across a trend's news items."""
+    return sum(extract.word_count(item.body or item.snippet)
+               for item in trend.news_items)
 
 
 def _format_internal_links(internal_links: list[dict]) -> str:
@@ -323,8 +416,8 @@ def _validate(raw: Any, trend: Trend, target_words: int) -> list[str]:
     # skipped over a few extra characters.
     html = str(raw.get("html_content", ""))
     h2_count = len(re.findall(r"<h2[\s>]", html, re.IGNORECASE))
-    if h2_count < 3:
-        errors.append(f"html_content needs at least 3 <h2> sections, found {h2_count}")
+    if h2_count < 2:
+        errors.append(f"html_content needs at least 2 <h2> sections, found {h2_count}")
 
     source_urls = {item.url for item in trend.news_items if item.url}
     needed = min(2, len(source_urls))
@@ -332,16 +425,41 @@ def _validate(raw: Any, trend: Trend, target_words: int) -> list[str]:
     if present < needed:
         errors.append(f"html_content needs at least {needed} source links, found {present}")
 
+    # A floor, not a band. The old +/-25% window around a random target is what
+    # forced padding; an article is allowed to be exactly as long as its material
+    # supports, so only the bottom is policed.
     words = _word_count(html)
-    low = int(target_words * (1 - WORD_TOLERANCE))
-    high = int(target_words * (1 + WORD_TOLERANCE))
-    if not low <= words <= high:
-        errors.append(f"word count {words} outside {low}-{high} (target {target_words})")
+    if words < MIN_ARTICLE_WORDS:
+        errors.append(f"word count {words} below the {MIN_ARTICLE_WORDS}-word minimum")
 
+    # An empty FAQ is fine (better than generic filler questions); a malformed
+    # one is not.
     faq = raw.get("faq")
-    if isinstance(faq, list) and not 3 <= len(faq) <= 4:
-        errors.append(f"faq must have 3-4 items, found {len(faq)}")
+    if isinstance(faq, list) and faq and len(faq) > 4:
+        errors.append(f"faq must have at most 4 items, found {len(faq)}")
+
+    errors.extend(_filler_errors(html))
     return errors
+
+
+# Openers that announce the article instead of reporting it, and the "go read it
+# elsewhere" construction that made the old output valueless to a reader.
+_FILLER_PATTERNS = (
+    (r"\bin this article,? we\b", "opens by announcing the article"),
+    (r"\bthis article (will )?(explores?|examines?|looks at)\b", "announces itself"),
+    (r"\b(more|further|full) (information|details) (can be found|are available|is available)\b",
+     "defers the substance to another site"),
+    (r"\bvisit .{0,40} (for|to) (more|the full)\b", "sends the reader elsewhere"),
+    (r"\bstay tuned\b", "filler sign-off"),
+    (r"\bit('s| is) (important|worth) (to note|noting)\b", "empty hedge"),
+)
+
+
+def _filler_errors(html: str) -> list[str]:
+    """Flag constructions that signal padding rather than reporting."""
+    text = html_lib.unescape(re.sub(r"<[^>]+>", " ", html))
+    return [f"remove filler — {why}" for pattern, why in _FILLER_PATTERNS
+            if re.search(pattern, text, re.IGNORECASE)]
 
 
 def _word_count(html: str) -> int:
