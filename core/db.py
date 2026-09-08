@@ -690,3 +690,23 @@ def recent_prune_log(limit: int = 200) -> list[dict]:
     return _execute(
         "SELECT * FROM prune_log ORDER BY pruned_at DESC LIMIT %s", (int(limit),), fetch="all"
     ) or []
+
+
+def abandon_stale_runs(older_than_hours: int = 6) -> int:
+    """Close runs left in 'running' by a killed job; return how many were closed.
+
+    A GitHub Actions job that hits its timeout is SIGKILLed, so run_staggered's
+    finally-block never executes and the row stays 'running' forever — 164 of
+    them had accumulated, all showing 0 posts and skewing every dashboard count.
+    Called at the start of each run, so each run tidies up after its predecessors.
+    """
+    rows = _execute(
+        "UPDATE runs SET status = 'failed', finished_at = now(), "
+        "error_summary = COALESCE(error_summary, '') || "
+        "'[abandoned: no completion recorded — the job was killed, most likely by "
+        "the workflow timeout]' "
+        "WHERE status = 'running' AND started_at < now() - make_interval(hours => %s) "
+        "RETURNING id",
+        (int(older_than_hours),), fetch="all",
+    ) or []
+    return len(rows)

@@ -247,8 +247,22 @@ def run_staggered(args: argparse.Namespace) -> None:
     gemini = build_gemini()
     gap = max(0, int(getattr(args, "gap_minutes", 3)))
     dedupe_days = settings.get("dedupe_window_days", 7)
-    logger.info("Staggered run | dry_run=%s | sites=%d | gap=%dmin",
-                args.dry_run, len(sites), gap)
+
+    # Wall-clock budget. Runs were regularly reaching the workflow's 180-minute
+    # timeout and being SIGKILLed mid-flight, which loses the digest and leaves
+    # the run row stuck on 'running' forever. We now stop starting new sites once
+    # the budget is spent and exit cleanly through the normal finally-block, so a
+    # slow run degrades to "fewer sites this time" instead of "no record at all".
+    budget_min = max(0, int(getattr(args, "max_minutes", 0)))
+    deadline = time.monotonic() + budget_min * 60 if budget_min else None
+
+    logger.info("Staggered run | dry_run=%s | sites=%d | gap=%dmin | budget=%s",
+                args.dry_run, len(sites), gap,
+                f"{budget_min}min" if budget_min else "none")
+    if not args.dry_run:
+        closed = db.abandon_stale_runs()
+        if closed:
+            logger.info("Closed %d stale run(s) left 'running' by a killed job", closed)
 
     # Record the run for the dashboard (real runs only — dry-run never writes).
     run_id, log_handler, log_buffer = None, None, None
@@ -278,6 +292,16 @@ def run_staggered(args: argparse.Namespace) -> None:
 
         for i, site in enumerate(targets):
             sid = site.get("id", "?")
+            # Stop BEFORE starting a site we cannot finish: writing, imaging and
+            # publishing a site takes minutes, and being killed part-way through
+            # is what loses the run record.
+            if deadline is not None and time.monotonic() >= deadline:
+                remaining = [s.get("id", "?") for s in targets[i:]]
+                msg = (f"time budget of {budget_min}min reached — stopping before "
+                       f"{len(remaining)} remaining site(s): {', '.join(remaining)}")
+                logger.warning("Staggered run: %s", msg)
+                errors.append(msg)
+                break
             site_assignments = by_site.get(sid, [])
             logger.info("=== staggered [%d/%d] site %s (%d article(s)) ===",
                         i + 1, len(targets), sid, len(site_assignments))
@@ -302,8 +326,12 @@ def run_staggered(args: argparse.Namespace) -> None:
                                      if res.wp_post_id else None),
                     })
             if gap and not args.dry_run and i < len(targets) - 1:
-                logger.info("waiting %d min before the next site...", gap)
-                time.sleep(gap * 60)
+                nap = gap * 60
+                if deadline is not None:  # never sleep past the budget
+                    nap = min(nap, max(0, deadline - time.monotonic()))
+                if nap > 0:
+                    logger.info("waiting %.1f min before the next site...", nap / 60)
+                    time.sleep(nap)
 
         skipped = ([t.title for t in found if not db.is_topic_used(t.trend_id, dedupe_days)]
                    if not args.dry_run else [])
@@ -460,6 +488,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--gap-minutes", type=int,
                    default=int(os.environ.get("STAGGER_GAP_MIN", "3") or 3), metavar="N",
                    help="minutes to wait between sites in --stagger mode (env STAGGER_GAP_MIN, default 3)")
+    p.add_argument("--max-minutes", type=int,
+                   default=int(os.environ.get("RUN_BUDGET_MIN", "0") or 0), metavar="N",
+                   help="wall-clock budget for --stagger: stop starting new sites after "
+                        "N minutes so the run always finishes cleanly inside the "
+                        "workflow timeout (env RUN_BUDGET_MIN, 0 = unlimited)")
     p.add_argument("--verbose", action="store_true",
                    help="enable debug-level logging")
     return p

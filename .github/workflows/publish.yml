@@ -24,7 +24,11 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 180        # 9 sites x 10-min gaps fits comfortably
+    # 150 < the 180-minute cron interval, so a slow run is stopped before the
+    # next one starts. RUN_BUDGET_MIN (below) stops the app 15 minutes earlier
+    # still, so it exits through its own finally-block and records the run
+    # instead of being SIGKILLed by Actions and left stuck on 'running'.
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
 
@@ -87,4 +91,7 @@ jobs:
           GEMINI_RETRY_JITTER: "true"
           GEMINI_COOLDOWN_AFTER_429_SECONDS: "90"
           STAGGER_GAP_MIN: "4"
+          # Wall-clock budget for the app itself; must stay under
+          # timeout-minutes so the run finishes on its own terms.
+          RUN_BUDGET_MIN: "135"
         run: python main.py --stagger
